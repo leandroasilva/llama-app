@@ -330,7 +330,7 @@ struct SettingsSidebar: View {
         // keyboard and announced as a control by VoiceOver. `.plain` keeps the
         // label rendering exactly as the list drew it.
         Button {
-          NSWorkspace.shared.open(URL(string: "https://github.com/ggml-org/Llama-macOS")!)
+          NSWorkspace.shared.open(URL(string: "https://github.com/leandroasilva/llama-app")!)
         } label: {
           Label {
             Text("Source code")

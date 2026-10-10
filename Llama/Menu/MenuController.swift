@@ -305,7 +305,7 @@ final class MenuController: NSObject, NSMenuDelegate {
     // `managed` was snapshotted above (needed there to resolve the page model);
     // the rest of the rebuild reuses it for the installed rows, the Discover
     // filter, the empty-state decision, and the membership snapshot below.
-    let suggestions = visibleDiscoverSuggestions(managed: managed)
+    let suggestions = managed.isEmpty ? visibleDiscoverSuggestions(managed: managed) : []
 
     // Rows whose tags-hidden title (org prefix + name + params + quant) collides
     // with another installed model's get their id's leftover tags shown as a
@@ -348,13 +348,6 @@ final class MenuController: NSObject, NSMenuDelegate {
     // and leaving Recommended as a floating first section.
     addInstalledSection(to: menu, models: managed, collidingKeys: collidingKeys)
     addDiscoverSection(to: menu, suggestions: suggestions)
-
-    // The Browse models row lives outside the Recommended section: it's the permanent
-    // escape hatch to the full web catalog, so it stays in the same spot whether
-    // the picks above are present, exhausted (all installed), or unavailable
-    // (offline / still loading).
-    menu.addItem(NSMenuItem.viewItem(with: SeparatorView()))
-    menu.addItem(NSMenuItem.viewItem(with: BrowseModelsRow(url: Self.browseCatalogUrl)))
 
     addFooter(to: menu)
 
