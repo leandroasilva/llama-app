@@ -9,7 +9,9 @@
 //! - Complex payloads travel as JSON; this keeps the ABI small and stable.
 
 use llama_core::config::{aliases, ini};
-use llama_core::engine::{binaries, installer, mem_profile, LlamaVersion};
+use llama_core::engine::{
+    binaries, download, installer, mem_profile, partial_writer, LlamaVersion,
+};
 use llama_core::hf::{
     GGUFMetadata, GGUFQuant, HFCache, HFRepoParser, SidecarPicker, SideloadedEntry,
 };
@@ -23,8 +25,10 @@ use llama_core::net::response::{
     blob_hash, commit_hash, file_metadata, same_host_redirect, HttpResponse,
 };
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::ffi::{c_char, c_int, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 /// A host callback that receives events (progress, completion, ...) marshaled
@@ -46,6 +50,19 @@ fn core() -> &'static Mutex<Core> {
             event_cb: None,
         })
     })
+}
+
+/// Open `PartialWriter`s keyed by an opaque handle. The JSON dispatch is
+/// stateless, so a stream surviving across `partial.*` calls lives here — the
+/// Rust analogue of Swift's `WriterTable` (minus the per-task URLSession map).
+fn partial_writers() -> &'static Mutex<HashMap<u64, partial_writer::PartialWriter>> {
+    static WRITERS: OnceLock<Mutex<HashMap<u64, partial_writer::PartialWriter>>> = OnceLock::new();
+    WRITERS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn next_partial_handle() -> u64 {
+    static SEQ: AtomicU64 = AtomicU64::new(1);
+    SEQ.fetch_add(1, Ordering::SeqCst)
 }
 
 unsafe fn cstr_to_str<'a>(p: *const c_char) -> &'a str {
@@ -938,6 +955,208 @@ fn dispatch(method: &str, args: &Value) -> Value {
                 Ok(()) => json!({ "ok": true }),
                 Err(message) => json!({ "error": message }),
             }
+        }
+
+        // ---- Fase 5: Download engine (ModelManager+Transfer leaves, ActiveDownload, DownloadError) ----
+        "download.extractFullSize" => {
+            let headers: Vec<(String, String)> = match args.get("headers").and_then(Value::as_array)
+            {
+                Some(a) => a
+                    .iter()
+                    .filter_map(|pair| {
+                        let p = pair.as_array()?;
+                        Some((
+                            p.first()?.as_str()?.to_string(),
+                            p.get(1)?.as_str()?.to_string(),
+                        ))
+                    })
+                    .collect(),
+                None => Vec::new(),
+            };
+            json!({ "size": download::extract_full_size(arg_i("status"), &headers) })
+        }
+        "download.userMessage" => json!({ "message": download::user_message(arg_i("status")) }),
+        "download.isTransient" => {
+            json!({ "transient": download::is_transient_error(arg_i("code")) })
+        }
+        "download.retryDelay" => {
+            let base = args
+                .get("base")
+                .and_then(Value::as_f64)
+                .unwrap_or(download::BASE_RETRY_DELAY);
+            json!({ "delay": download::retry_delay_seconds(arg_i("attempts"), base) })
+        }
+        "download.transientDecision" => {
+            let decision = download::transient_decision(
+                args.get("isNetworkAvailable")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true),
+                arg_i("attempts"),
+                args.get("maxAttempts")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(download::MAX_RETRY_ATTEMPTS),
+            );
+            match decision {
+                download::TransientDecision::Retry => json!({ "outcome": "retry" }),
+                download::TransientDecision::Park {
+                    resume_on_reconnect,
+                } => {
+                    json!({ "outcome": "park", "resumeOnReconnect": resume_on_reconnect })
+                }
+            }
+        }
+        "download.refreshProgress" => {
+            let s = download::refresh_progress(
+                arg_i("totalUnitCount"),
+                arg_i("completedFilesBytes"),
+                arg_i("activeBytes"),
+                arg_i("expectedActiveBytes"),
+            );
+            json!({
+                "totalUnitCount": s.total_unit_count,
+                "completedUnitCount": s.completed_unit_count,
+            })
+        }
+        "download.rate" => {
+            let samples: Vec<(f64, i64)> = match args.get("samples").and_then(Value::as_array) {
+                Some(a) => a
+                    .iter()
+                    .filter_map(|s| {
+                        let s = s.as_array()?;
+                        Some((s.first()?.as_f64()?, s.get(1)?.as_i64()?))
+                    })
+                    .collect(),
+                None => Vec::new(),
+            };
+            let window = args.get("window").and_then(Value::as_f64).unwrap_or(5.0); // ActiveDownload.rateWindow
+            json!({ "rate": download::rate_bytes_per_second(&samples, window) })
+        }
+        "download.errorMessage" => {
+            let e = if arg_str("kind") == "notCompatible" {
+                download::DownloadError::NotCompatible(arg_str("reason").to_string())
+            } else {
+                download::DownloadError::NotEnoughDiskSpace {
+                    required: arg_str("required").to_string(),
+                    available: arg_str("available").to_string(),
+                }
+            };
+            json!({
+                "description": e.description(),
+                "recovery": e.recovery_suggestion(),
+            })
+        }
+        "download.verifyHash" => json!({
+            "matches": download::expected_hash_matches(arg_str("computed"), arg_str("expected"))
+        }),
+        "download.isTooSmall" => json!({ "tooSmall": download::is_too_small(arg_i("size")) }),
+
+        // ---- Fase 5: partial file writer (streaming + resume re-hash) ----
+        "partial.sha256" => {
+            json!({ "hex": partial_writer::sha256_hex(arg_str("text").as_bytes()) })
+        }
+        "partial.feedHash" => match partial_writer::feed_sha256(arg_str("path")) {
+            Ok(digest) => json!({ "digest": digest }),
+            Err(e) => json!({ "error": e.kind(), "message": e.message() }),
+        },
+        "partial.open" => {
+            let expected = args
+                .get("expectedBlobHash")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            match partial_writer::PartialWriter::open(arg_str("path"), expected) {
+                Ok(w) => {
+                    let bytes = w.bytes_written();
+                    let digest = w.digest_hex();
+                    let handle = next_partial_handle();
+                    partial_writers()
+                        .lock()
+                        .expect("partial writer registry poisoned")
+                        .insert(handle, w);
+                    json!({
+                        "handle": handle,
+                        "bytesWritten": bytes,
+                        "digest": digest,
+                    })
+                }
+                Err(e) => json!({ "error": e.kind(), "message": e.message() }),
+            }
+        }
+        "partial.append" => {
+            let handle = arg_i("handle") as u64;
+            let mut locked = partial_writers()
+                .lock()
+                .expect("partial writer registry poisoned");
+            match locked.get_mut(&handle) {
+                Some(w) => match w.append(arg_str("text").as_bytes()) {
+                    Ok(()) => json!({
+                        "ok": true,
+                        "bytesWritten": w.bytes_written(),
+                        "digest": w.digest_hex(),
+                    }),
+                    Err(e) => json!({ "error": e.kind(), "message": e.message() }),
+                },
+                None => json!({
+                    "error": "notFound",
+                    "message": format!("no partial writer for handle {handle}"),
+                }),
+            }
+        }
+        "partial.restart" => {
+            let handle = arg_i("handle") as u64;
+            let mut locked = partial_writers()
+                .lock()
+                .expect("partial writer registry poisoned");
+            match locked.get_mut(&handle) {
+                Some(w) => match w.restart() {
+                    Ok(()) => json!({
+                        "ok": true,
+                        "bytesWritten": w.bytes_written(),
+                        "digest": w.digest_hex(),
+                    }),
+                    Err(e) => json!({ "error": e.kind(), "message": e.message() }),
+                },
+                None => json!({
+                    "error": "notFound",
+                    "message": format!("no partial writer for handle {handle}"),
+                }),
+            }
+        }
+        "partial.setTotalExpected" => {
+            let handle = arg_i("handle") as u64;
+            let mut locked = partial_writers()
+                .lock()
+                .expect("partial writer registry poisoned");
+            match locked.get_mut(&handle) {
+                Some(w) => {
+                    w.set_total_expected(arg_i("size"));
+                    json!({ "ok": true, "totalExpected": w.total_expected() })
+                }
+                None => json!({
+                    "error": "notFound",
+                    "message": format!("no partial writer for handle {handle}"),
+                }),
+            }
+        }
+        "partial.digest" => {
+            let handle = arg_i("handle") as u64;
+            let locked = partial_writers()
+                .lock()
+                .expect("partial writer registry poisoned");
+            match locked.get(&handle) {
+                Some(w) => json!({ "digest": w.digest_hex() }),
+                None => json!({
+                    "error": "notFound",
+                    "message": format!("no partial writer for handle {handle}"),
+                }),
+            }
+        }
+        "partial.close" => {
+            let handle = arg_i("handle") as u64;
+            partial_writers()
+                .lock()
+                .expect("partial writer registry poisoned")
+                .remove(&handle);
+            json!({ "ok": true })
         }
 
         // Smoke test for the event channel.

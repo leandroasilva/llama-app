@@ -746,3 +746,244 @@ fn fase4_engine() {
 
     cleanup();
 }
+
+#[test]
+fn fase5_download() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::SeqCst);
+    let root =
+        std::env::temp_dir().join(format!("llama-core-ffi-phase5-{}-{n}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+
+    // -- Pure response leaves. --
+    let out: serde_json::Value = serde_json::from_str(
+        &call(
+            "download.extractFullSize",
+            r#"{"status":206,"headers":[["Content-Range","bytes 302-90210/100000"]]}"#,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(out["size"], 100_000);
+
+    assert_eq!(
+        call("download.userMessage", r#"{"status":401}"#).unwrap(),
+        r#"{"message":"Hugging Face requires authentication for this download. Set a Hugging Face token in Settings and try again."}"#
+    );
+    assert_eq!(
+        call("download.userMessage", r#"{"status":200}"#).unwrap(),
+        r#"{"message":"Download failed with HTTP 200."}"#
+    );
+
+    assert_eq!(
+        call("download.isTransient", r#"{"code":-1001}"#).unwrap(),
+        r#"{"transient":true}"#
+    );
+    assert_eq!(
+        call("download.isTransient", r#"{"code":-999}"#).unwrap(),
+        r#"{"transient":false}"#
+    );
+
+    assert_eq!(
+        call("download.retryDelay", r#"{"attempts":2}"#).unwrap(),
+        r#"{"delay":8.0}"#
+    );
+
+    assert_eq!(
+        call(
+            "download.transientDecision",
+            r#"{"isNetworkAvailable":true,"attempts":0,"maxAttempts":3}"#
+        )
+        .unwrap(),
+        r#"{"outcome":"retry"}"#
+    );
+    let out: serde_json::Value = serde_json::from_str(
+        &call(
+            "download.transientDecision",
+            r#"{"isNetworkAvailable":false,"attempts":1,"maxAttempts":3}"#,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(out["outcome"], "park");
+    assert_eq!(out["resumeOnReconnect"], true);
+
+    // Progress floors at 1 and never shrinks.
+    let out: serde_json::Value = serde_json::from_str(
+        &call(
+            "download.refreshProgress",
+            r#"{"totalUnitCount":0,"completedFilesBytes":0,"activeBytes":0,"expectedActiveBytes":0}"#,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(out["totalUnitCount"], 1);
+
+    let out: serde_json::Value = serde_json::from_str(
+        &call(
+            "download.rate",
+            r#"{"samples":[[0.0,0],[2.0,3000]],"window":5.0}"#,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(out["rate"], 1500);
+    let out: serde_json::Value =
+        serde_json::from_str(&call("download.rate", r#"{"samples":[],"window":5.0}"#).unwrap())
+            .unwrap();
+    assert!(out["rate"].is_null());
+
+    let out: serde_json::Value = serde_json::from_str(
+        &call(
+            "download.errorMessage",
+            r#"{"kind":"notCompatible","reason":"requires 32 GB"}"#,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(out["description"], "Model Not Compatible");
+    assert_eq!(
+        out["recovery"],
+        "This model requires 32 GB. Choose a smaller model or upgrade your system memory."
+    );
+
+    assert_eq!(
+        call(
+            "download.verifyHash",
+            r#"{"computed":"aabb","expected":"aabb"}"#
+        )
+        .unwrap(),
+        r#"{"matches":true}"#
+    );
+    assert_eq!(
+        call("download.isTooSmall", r#"{"size":0}"#).unwrap(),
+        r#"{"tooSmall":true}"#
+    );
+    assert_eq!(
+        call("download.isTooSmall", r#"{"size":1000001}"#).unwrap(),
+        r#"{"tooSmall":false}"#
+    );
+
+    // -- Partial writer lifecycle through the registry. --
+    assert_eq!(
+        call("partial.sha256", r#"{"text":"abc"}"#).unwrap(),
+        r#"{"hex":"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"}"#
+    );
+
+    let partial = root
+        .join("model.gguf.partial")
+        .to_string_lossy()
+        .into_owned();
+
+    // Feed-hash a missing path is a classified openFailed, not a panic.
+    let out: serde_json::Value = serde_json::from_str(
+        &call(
+            "partial.feedHash",
+            r#"{"path":"/nonexistent/llama-core/x"}"#,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(out["error"], "openFailed");
+
+    // Open fresh: empty digest, zero bytes.
+    let out: serde_json::Value = serde_json::from_str(
+        &call(
+            "partial.open",
+            &serde_json::json!({ "path": partial }).to_string(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let handle = out["handle"].as_u64().expect("handle");
+    assert_eq!(out["bytesWritten"], 0);
+    assert_eq!(
+        out["digest"],
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
+
+    // Append streamed chunks: running hash == sha256 of concatenation.
+    let out: serde_json::Value = serde_json::from_str(
+        &call(
+            "partial.append",
+            &serde_json::json!({ "handle": handle, "text": "abc" }).to_string(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(out["ok"], true);
+    assert_eq!(out["bytesWritten"], 3);
+    assert_eq!(
+        out["digest"],
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
+
+    let out: serde_json::Value = serde_json::from_str(
+        &call(
+            "partial.append",
+            &serde_json::json!({ "handle": handle, "text": "def" }).to_string(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(out["bytesWritten"], 6);
+    assert_eq!(
+        out["digest"],
+        "bef57ec7f53a6d40beb640a780a639c83bc29ac8a9816f1fc6c5c6dcd93c4721"
+    );
+
+    // The on-disk file re-hashes to the same digest (resume path).
+    let out: serde_json::Value = serde_json::from_str(
+        &call(
+            "partial.feedHash",
+            &serde_json::json!({ "path": partial }).to_string(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        out["digest"],
+        "bef57ec7f53a6d40beb640a780a639c83bc29ac8a9816f1fc6c5c6dcd93c4721"
+    );
+
+    // 200 restart: truncate + reset hash + counter.
+    let out: serde_json::Value = serde_json::from_str(
+        &call(
+            "partial.restart",
+            &serde_json::json!({ "handle": handle }).to_string(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(out["ok"], true);
+    assert_eq!(out["bytesWritten"], 0);
+    assert_eq!(
+        out["digest"],
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
+
+    // Unknown handle: classified notFound.
+    let out: serde_json::Value = serde_json::from_str(
+        &call(
+            "partial.append",
+            &serde_json::json!({ "handle": 424242, "text": "x" }).to_string(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(out["error"], "notFound");
+
+    // Close drops the registry entry.
+    assert_eq!(
+        call(
+            "partial.close",
+            &serde_json::json!({ "handle": handle }).to_string()
+        )
+        .unwrap(),
+        r#"{"ok":true}"#
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}

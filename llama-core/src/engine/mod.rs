@@ -1,6 +1,8 @@
 pub mod binaries;
+pub mod download;
 pub mod installer;
 pub mod mem_profile;
+pub mod partial_writer;
 pub mod version;
 
 pub use binaries::{managed_path, resolve, Origin};

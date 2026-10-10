@@ -1,0 +1,90 @@
+{
+  "fullSizeCases": [
+    { "name": "206-content-range", "status": 206, "headers": [["Content-Range", "bytes 1048576-10485759/10485760"]], "size": 10485760 },
+    { "name": "206-content-range-star", "status": 206, "headers": [["Content-Range", "bytes 0-99/*"]], "size": 0 },
+    { "name": "206-with-content-length", "status": 206, "headers": [["Content-Range", "bytes 0-9/100"], ["Content-Length", "75"]], "size": 100 },
+    { "name": "200-content-length", "status": 200, "headers": [["Content-Length", "12345"]], "size": 12345 },
+    { "name": "case-insensitive", "status": 206, "headers": [["content-range", "bytes 0-99/777"]], "size": 777 },
+    { "name": "404-with-content-length", "status": 404, "headers": [["Content-Length", "1024"]], "size": 1024 },
+    { "name": "no-headers", "status": 200, "headers": [], "size": 0 },
+    { "name": "garbage-length", "status": 200, "headers": [["Content-Length", "oops"]], "size": 0 },
+    { "name": "empty-content-range-total", "status": 206, "headers": [["Content-Range", "bytes 0-9/"]], "size": 0 }
+  ],
+  "userMessageCases": [
+    { "name": "unauthorized", "status": 401, "message": "Hugging Face requires authentication for this download. Set a Hugging Face token in Settings and try again." },
+    { "name": "forbidden", "status": 403, "message": "Hugging Face refused the download (HTTP 403). This usually means a rate limit — try again in a few minutes, or set a Hugging Face token in Settings to lift the limit." },
+    { "name": "rate-limit", "status": 429, "message": "Hugging Face refused the download (HTTP 429). This usually means a rate limit — try again in a few minutes, or set a Hugging Face token in Settings to lift the limit." },
+    { "name": "missing", "status": 404, "message": "Hugging Face returned 404 for this file. The repo may have moved or been removed." },
+    { "name": "server-error", "status": 500, "message": "Hugging Face is temporarily unavailable (HTTP 500). Try again in a few minutes." },
+    { "name": "server-unavailable", "status": 503, "message": "Hugging Face is temporarily unavailable (HTTP 503). Try again in a few minutes." },
+    { "name": "unexpected-2xx", "status": 200, "message": "Download failed with HTTP 200." },
+    { "name": "unexpected-3xx", "status": 302, "message": "Download failed with HTTP 302." }
+  ],
+  "transientCodes": [
+    { "name": "timed-out", "code": -1001, "transient": true },
+    { "name": "cannot-connect", "code": -1004, "transient": true },
+    { "name": "connection-lost", "code": -1005, "transient": true },
+    { "name": "offline", "code": -1009, "transient": true },
+    { "name": "dns", "code": -1003, "transient": true },
+    { "name": "cancelled", "code": -999, "transient": false },
+    { "name": "ssl", "code": -1200, "transient": false },
+    { "name": "unknown", "code": 0, "transient": false }
+  ],
+  "retryDelays": [
+    { "name": "first", "attempts": 0, "base": 2.0, "delay": 2.0 },
+    { "name": "second", "attempts": 1, "base": 2.0, "delay": 4.0 },
+    { "name": "third", "attempts": 2, "base": 2.0, "delay": 8.0 },
+    { "name": "custom-base", "attempts": 1, "base": 1.0, "delay": 2.0 }
+  ],
+  "transientDecisions": [
+    { "name": "blip-retries",
+  "isNetworkAvailable": true,
+  "attempts": 0,
+  "maxAttempts": 3,
+  "outcome": "retry"
+ },
+    { "name": "last-attempt-retries",
+  "isNetworkAvailable": true,
+  "attempts": 2,
+  "maxAttempts": 3,
+  "outcome": "retry"
+ },
+    { "name": "offline-parks-with-resume", "isNetworkAvailable": false, "attempts": 0, "maxAttempts": 3, "outcome": "park", "resumeOnReconnect": true },
+    { "name": "exhausted-parks-no-resume", "isNetworkAvailable": true, "attempts": 3, "maxAttempts": 3, "outcome": "park", "resumeOnReconnect": false }
+  ],
+  "rateCases": [
+    { "name": "empty", "samples": [], "window": 5.0, "rate": null },
+    { "name": "sub-second-noisy", "samples": [[0.0, 0], [0.5, 100]], "window": 5.0, "rate": null },
+    { "name": "smooth", "samples": [[0.0, 0], [1.0, 500], [2.0, 3000]], "window": 5.0, "rate": 1500 },
+    { "name": "rewound-clamped", "samples": [[0.0, 9000], [2.0, 1000]], "window": 5.0, "rate": 0 },
+    { "name": "truncation", "samples": [[0.0, 100], [1.0, 199]], "window": 5.0, "rate": 99 }
+  ],
+  "progressCases": [
+    { "name": "seeded-resume", "totalUnitCount": 100, "completedFilesBytes": 0, "activeBytes": 37, "expectedActiveBytes": 100, "totalUnitCountAfter": 100, "completedUnitCountAfter": 37 },
+    { "name": "length-came-late", "totalUnitCount": 50, "completedFilesBytes": 0, "activeBytes": 10, "expectedActiveBytes": 500, "totalUnitCountAfter": 500, "completedUnitCountAfter": 10 },
+    { "name": "never-shrinks", "totalUnitCount": 900, "completedFilesBytes": 800, "activeBytes": 0, "expectedActiveBytes": 0, "totalUnitCountAfter": 900, "completedUnitCountAfter": 800 },
+    { "name": "zeros-floor-to-one", "totalUnitCount": 0, "completedFilesBytes": 0, "activeBytes": 0, "expectedActiveBytes": 0, "totalUnitCountAfter": 1, "completedUnitCountAfter": 0 },
+    { "name": "completed-files-plus-active", "totalUnitCount": 1000, "completedFilesBytes": 640, "activeBytes": 200, "expectedActiveBytes": 360, "totalUnitCountAfter": 1000, "completedUnitCountAfter": 840 }
+  ],
+  "errorMessageCases": [
+    { "name": "notCompatible", "kind": "notCompatible", "reason": "requires 32 GB", "description": "Model Not Compatible", "recovery": "This model requires 32 GB. Choose a smaller model or upgrade your system memory." },
+    { "name": "notEnoughDiskSpace", "kind": "notEnoughDiskSpace", "required": "15.0 GB", "available": "3.2 GB", "description": "Not Enough Disk Space", "recovery": "This model requires 15.0 GB of free space, but only 3.2 GB is available. Please free up some space." }
+  ],
+  "sha256Vectors": [
+    { "input": "", "hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" },
+    { "input": "abc", "hex": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" },
+    { "input": "hello world", "hex": "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9" },
+    { "input": "abcdef", "hex": "bef57ec7f53a6d40beb640a780a639c83bc29ac8a9816f1fc6c5c6dcd93c4721" }
+  ],
+  "hashVerifyCases": [
+    { "name": "matches", "computed": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "expected": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "matches": true },
+    { "name": "mismatch", "computed": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "expected": "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9", "matches": false }
+  ],
+  "tooSmallCases": [
+    { "name": "empty", "size": 0, "tooSmall": true },
+    { "name": "just-below", "size": 999999, "tooSmall": true },
+    { "name": "at-threshold", "size": 1000000, "tooSmall": true },
+    { "name": "above-threshold", "size": 1000001, "tooSmall": false },
+    { "name": "real-model", "size": 700000000, "tooSmall": false }
+  ]
+}

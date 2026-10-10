@@ -399,7 +399,7 @@
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-L$(SRCROOT)/target/release",
-					"-lllama_core_ffi",
+					"$(SRCROOT)/target/release/libllama_core_ffi.a",
 				);
 				SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/Llama/CoreBridge/Llama-Bridging-Header.h";
 				URL_SCHEME = "llama-dev";
@@ -441,7 +441,7 @@
 				OTHER_LDFLAGS = (
 					"$(inherited)",
 					"-L$(SRCROOT)/target/release",
-					"-lllama_core_ffi",
+					"$(SRCROOT)/target/release/libllama_core_ffi.a",
 				);
 				SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/Llama/CoreBridge/Llama-Bridging-Header.h";
 				URL_SCHEME = llama;
