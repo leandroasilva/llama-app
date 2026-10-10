@@ -14,6 +14,14 @@ use llama_core::hf::{
     GGUFMetadata, GGUFQuant, HFCache, HFRepoParser, SidecarPicker, SideloadedEntry,
 };
 use llama_core::models::{model, ContextTier, DraftHead, ModelIdParser, ModelMem, ResolvedPaths};
+use llama_core::net::catalog;
+use llama_core::net::hf_repo_resolver::{
+    resolve_from_siblings, resolve_url, ResolveError, Resolved, Sibling,
+};
+use llama_core::net::hf_request;
+use llama_core::net::response::{
+    blob_hash, commit_hash, file_metadata, same_host_redirect, HttpResponse,
+};
 use serde_json::{json, Value};
 use std::ffi::{c_char, c_int, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -266,6 +274,87 @@ fn sideloaded_entry_to_value(e: &SideloadedEntry) -> Value {
         "isDecisionModel": e.is_decision_model,
         "paths": resolved_paths_to_value(&e.paths),
     })
+}
+
+fn siblings_from_value(v: &Value) -> Vec<Sibling> {
+    v.as_array()
+        .map(|a| {
+            a.iter()
+                .map(|s| {
+                    Sibling::new(
+                        s.get("rfilename")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
+                        s.get("size").and_then(Value::as_i64),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn families_from_value(v: &Value) -> Vec<catalog::Family> {
+    v.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|f| serde_json::from_value(f.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn resolved_to_value(r: &Resolved) -> Value {
+    json!({
+        "modelId": r.model_id,
+        "mainUrl": r.main_url,
+        "additionalParts": r.additional_parts,
+        "mmprojUrl": r.mmproj_url,
+        "draftUrl": r.draft_url,
+        "approximateBytes": r.approximate_bytes,
+    })
+}
+
+fn resolve_error_to_value(e: &ResolveError) -> Value {
+    json!({ "error": e.kind(), "message": e.message() })
+}
+
+fn suggestions_to_value(sa: &[catalog::Suggestion]) -> Value {
+    Value::Array(
+        sa.iter()
+            .map(|s| {
+                json!({
+                    "brand": s.brand,
+                    "repo": s.repo,
+                    "quant": s.quant,
+                    "sizeLabel": s.size_label,
+                    "hasVision": s.has_vision,
+                })
+            })
+            .collect(),
+    )
+}
+
+fn response_from_value(v: &Value) -> HttpResponse {
+    let headers: Vec<(String, String)> = v
+        .get("headers")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|p| {
+                    let pair = p.as_array()?;
+                    let k = pair.first()?.as_str()?;
+                    let val = pair.get(1)?.as_str()?;
+                    Some((k.to_string(), val.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    HttpResponse {
+        status: v.get("status").and_then(Value::as_u64).unwrap_or(200) as u16,
+        headers,
+        body: Vec::new(),
+    }
 }
 
 fn dispatch(method: &str, args: &Value) -> Value {
@@ -670,6 +759,56 @@ fn dispatch(method: &str, args: &Value) -> Value {
             aliases::set_alias(&mut section, &names);
             json!({ "section": section_to_value(&section) })
         }
+
+        // ---- Fase 3: network + remote selection ----
+        "net.resolveFromSiblings" => {
+            let requested = args.get("requestedQuant").and_then(Value::as_str);
+            let siblings = siblings_from_value(args.get("siblings").unwrap_or(&Value::Null));
+            match resolve_from_siblings(arg_str("repo"), requested, &siblings, arg_f("budgetMb")) {
+                Ok(r) => resolved_to_value(&r),
+                Err(e) => resolve_error_to_value(&e),
+            }
+        }
+        "net.resolveUrl" => {
+            json!({ "url": resolve_url(arg_str("repo"), arg_str("path")) })
+        }
+        "catalog.parseBytes" => {
+            let label = args.get("label").and_then(Value::as_str);
+            json!({ "bytes": catalog::parse_bytes(label) })
+        }
+        "catalog.featuredSuggestions" => {
+            let families = families_from_value(args.get("families").unwrap_or(&Value::Null));
+            let suggestions = catalog::featured_suggestions(
+                &families,
+                arg_f("budgetMb"),
+                arg_i("systemMemoryMb") as u64,
+            );
+            json!({ "suggestions": suggestions_to_value(&suggestions) })
+        }
+        "hfRequest.userAgent" => json!({
+            "ua": hf_request::user_agent(arg_str("shortVersion"), arg_i("osMajor"), arg_i("osMinor"))
+        }),
+        "hfRequest.make" => {
+            let token = args.get("token").and_then(Value::as_str);
+            let headers: Vec<Value> = hf_request::make(arg_str("url"), token, arg_str("userAgent"))
+                .iter()
+                .map(|(k, v)| json!([k, v]))
+                .collect();
+            json!({ "headers": headers })
+        }
+        "net.blobHash" => json!({ "hash": blob_hash(&response_from_value(args)) }),
+        "net.commitHash" => json!({ "hash": commit_hash(&response_from_value(args)) }),
+        "net.fileMetadata" => {
+            let meta = file_metadata(&response_from_value(args))
+                .map(|m| json!({ "blobHash": m.blob_hash, "commitHash": m.commit_hash }));
+            json!({ "metadata": meta })
+        }
+        "net.sameHostRedirect" => json!({
+            "value": same_host_redirect(
+                args.get("from").and_then(Value::as_str),
+                args.get("to").and_then(Value::as_str),
+            )
+        }),
 
         // Smoke test for the event channel.
         "emit.test" => {

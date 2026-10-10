@@ -322,3 +322,118 @@ fn fase2_hf_cache_write_blob_and_link() {
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+#[test]
+fn fase3_network() {
+    let resolve = serde_json::json!({
+        "repo": "unsloth/Qwen3-4B-GGUF",
+        "requestedQuant": null,
+        "budgetMb": 100000,
+        "siblings": [
+            { "rfilename": "Qwen3-4B-Q8_0.gguf", "size": 4000000000i64 },
+            { "rfilename": "Qwen3-4B-Q4_K_M.gguf", "size": 2500000000i64 }
+        ]
+    })
+    .to_string();
+    let out: serde_json::Value =
+        serde_json::from_str(&call("net.resolveFromSiblings", &resolve).unwrap()).unwrap();
+    assert_eq!(out["modelId"], "unsloth/Qwen3-4B-GGUF:Q4_K_M");
+    assert_eq!(
+        out["mainUrl"],
+        "https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf"
+    );
+    assert_eq!(out["approximateBytes"], 2500000000i64);
+
+    let missing = serde_json::json!({
+        "repo": "org/Missing-Shard-GGUF",
+        "budgetMb": 100000,
+        "siblings": [
+            { "rfilename": "model-00001-of-00002.gguf", "size": 1 }
+        ]
+    })
+    .to_string();
+    let out: serde_json::Value =
+        serde_json::from_str(&call("net.resolveFromSiblings", &missing).unwrap()).unwrap();
+    assert_eq!(out["error"], "shardMissing");
+
+    assert_eq!(
+        call(
+            "net.resolveUrl",
+            r#"{"repo":"org/Space-GGUF","path":"my model-Q4_K_M.gguf"}"#
+        )
+        .unwrap(),
+        r#"{"url":"https://huggingface.co/org/Space-GGUF/resolve/main/my%20model-Q4_K_M.gguf"}"#
+    );
+
+    assert_eq!(
+        call("catalog.parseBytes", r#"{"label":"5.0 GB"}"#).unwrap(),
+        r#"{"bytes":5000000000}"#
+    );
+
+    let catalog = serde_json::json!({
+        "families": [{
+            "brand": "Gemma",
+            "featured": true,
+            "sizes": [{
+                "vision": false,
+                "builds": [
+                    { "quant": "Q4_K_M", "size": "3.0 GB", "repo": "g/x" },
+                    { "quant": "Q8_0", "size": "5.0 GB", "repo": "g/x" }
+                ]
+            }]
+        }],
+        "budgetMb": 100000,
+        "systemMemoryMb": 32768
+    })
+    .to_string();
+    let out: serde_json::Value =
+        serde_json::from_str(&call("catalog.featuredSuggestions", &catalog).unwrap()).unwrap();
+    assert_eq!(out["suggestions"][0]["quant"], "Q8_0");
+    assert_eq!(out["suggestions"][0]["brand"], "Gemma");
+
+    assert_eq!(
+        call(
+            "hfRequest.userAgent",
+            r#"{"shortVersion":"1.2.3","osMajor":15,"osMinor":2}"#
+        )
+        .unwrap(),
+        r#"{"ua":"llama-app/1.2.3 (macOS 15.2; arm64)"}"#
+    );
+
+    let headers = serde_json::json!({
+        "url": "https://huggingface.co/x",
+        "token": "hf_abc",
+        "userAgent": "llama-app/1.2.3 (macOS 15.2; arm64)"
+    })
+    .to_string();
+    assert_eq!(
+        call("hfRequest.make", &headers).unwrap(),
+        r#"{"headers":[["User-Agent","llama-app/1.2.3 (macOS 15.2; arm64)"],["Authorization","Bearer hf_abc"]]}"#
+    );
+
+    let bh = serde_json::json!({
+        "status": 200,
+        "headers": [["X-Linked-Etag", "\"abc123\""]]
+    })
+    .to_string();
+    assert_eq!(call("net.blobHash", &bh).unwrap(), r#"{"hash":"abc123"}"#);
+
+    let fm = serde_json::json!({
+        "status": 302,
+        "headers": [["X-Repo-Commit", "deadbeef"]]
+    })
+    .to_string();
+    assert_eq!(
+        call("net.fileMetadata", &fm).unwrap(),
+        r#"{"metadata":{"blobHash":null,"commitHash":"deadbeef"}}"#
+    );
+
+    assert_eq!(
+        call(
+            "net.sameHostRedirect",
+            r#"{"from":"huggingface.co","to":"cdn-lfs.huggingface.co"}"#
+        )
+        .unwrap(),
+        r#"{"value":false}"#
+    );
+}

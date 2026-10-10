@@ -1,0 +1,89 @@
+{
+  "testUserAgent": "llama-app/1.2.3 (macOS 15.2; arm64)",
+  "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "userAgent": [
+    {
+      "shortVersion": "1.2.3",
+      "osMajor": 15,
+      "osMinor": 2,
+      "expected": "llama-app/1.2.3 (macOS 15.2; arm64)"
+    },
+    {
+      "shortVersion": "0.0.0",
+      "osMajor": 26,
+      "osMinor": 0,
+      "expected": "llama-app/0.0.0 (macOS 26.0; arm64)"
+    }
+  ],
+  "requests": [
+    {
+      "name": "hf-with-token",
+      "url": "https://huggingface.co/org/repo/resolve/main/x.gguf",
+      "token": "hf_abc",
+      "expected": [
+        ["User-Agent", "llama-app/1.2.3 (macOS 15.2; arm64)"],
+        ["Authorization", "Bearer hf_abc"]
+      ]
+    },
+    {
+      "name": "hf-subdomain-with-token",
+      "url": "https://cdn-lfs.huggingface.co/x",
+      "token": "t",
+      "expected": [
+        ["User-Agent", "llama-app/1.2.3 (macOS 15.2; arm64)"],
+        ["Authorization", "Bearer t"]
+      ]
+    },
+    {
+      "name": "evil-host-no-token",
+      "url": "https://evilhuggingface.co/x",
+      "token": "t",
+      "expected": [["User-Agent", "llama-app/1.2.3 (macOS 15.2; arm64)"]]
+    },
+    {
+      "name": "other-host-no-token",
+      "url": "https://example.com/x",
+      "token": "t",
+      "expected": [["User-Agent", "llama-app/1.2.3 (macOS 15.2; arm64)"]]
+    },
+    {
+      "name": "no-token",
+      "url": "https://huggingface.co/x",
+      "token": null,
+      "expected": [["User-Agent", "llama-app/1.2.3 (macOS 15.2; arm64)"]]
+    }
+  ],
+  "blobHash": [
+    { "name": "x-linked-etag", "xLinkedEtag": "\"abc123\"", "etag": null, "expected": "abc123" },
+    {
+      "name": "falls-back-to-etag",
+      "xLinkedEtag": null,
+      "etag": "\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"",
+      "expected": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    },
+    {
+      "name": "weak-etag-stripped",
+      "xLinkedEtag": null,
+      "etag": "W/\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"",
+      "expected": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    },
+    { "name": "non-sha-etag-rejected", "xLinkedEtag": null, "etag": "\"short\"", "expected": null },
+    { "name": "no-etag", "xLinkedEtag": null, "etag": null, "expected": null },
+    {
+      "name": "x-linked-etag-wins",
+      "xLinkedEtag": "\"preferred\"",
+      "etag": "\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"",
+      "expected": "preferred"
+    }
+  ],
+  "commitHash": [
+    { "xRepoCommit": "deadbeef", "expected": "deadbeef" },
+    { "xRepoCommit": null, "expected": null }
+  ],
+  "redirect": [
+    { "from": "huggingface.co", "to": "huggingface.co", "expected": true },
+    { "from": "huggingface.co", "to": "cdn-lfs.huggingface.co", "expected": false },
+    { "from": null, "to": "huggingface.co", "expected": false },
+    { "from": "huggingface.co", "to": null, "expected": false }
+  ]
+}

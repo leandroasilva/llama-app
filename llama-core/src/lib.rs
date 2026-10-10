@@ -9,4 +9,5 @@ pub mod config;
 pub mod engine;
 pub mod hf;
 pub mod models;
+pub mod net;
 pub mod pathutil;
