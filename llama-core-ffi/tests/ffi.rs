@@ -987,3 +987,260 @@ fn fase5_download() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn fase6_server() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::SeqCst);
+    let root =
+        std::env::temp_dir().join(format!("llama-core-ffi-phase6-{}-{n}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let tmp = root.to_string_lossy().into_owned();
+    std::fs::write(root.join("index.html"), "<html></html>").unwrap();
+
+    // -- Shell quoting and rendered invocations. --
+    assert_eq!(
+        call("server.quote", r#"{"text":"a' b"}"#).unwrap(),
+        r#"{"quoted":"'a'\\'' b'"}"#
+    );
+    assert_eq!(
+        call("server.quote", r#"{"text":"/usr/local/bin/llama"}"#).unwrap(),
+        r#"{"quoted":"/usr/local/bin/llama"}"#
+    );
+    let command: serde_json::Value = serde_json::from_str(
+        &call(
+            "server.displayCommand",
+            &serde_json::json!({
+                "executablePath": format!("{tmp}/bin/llama"),
+                "arguments": ["serve", "--port", "8080"],
+                "extraArgCount": 0,
+                "env": [["GGML_METAL_NO_RESIDENCY", "1"]],
+            })
+            .to_string(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        command["command"],
+        format!("export GGML_METAL_NO_RESIDENCY=1\n\n{tmp}/bin/llama serve \\\n  --port 8080")
+    );
+
+    // -- Host argument gating on the multi-host engine version. --
+    assert_eq!(
+        call(
+            "server.hostArgument",
+            r#"{"bindAddress":"100.64.0.1","versionBuild":11200}"#
+        )
+        .unwrap(),
+        r#"{"host":"127.0.0.1,100.64.0.1"}"#
+    );
+    assert_eq!(
+        call(
+            "server.hostArgument",
+            r#"{"bindAddress":"100.64.0.1","versionBuild":11103}"#
+        )
+        .unwrap(),
+        r#"{"host":"100.64.0.1"}"#
+    );
+
+    // -- Tailscale + interface classification. --
+    assert_eq!(
+        call("server.isTailscaleAddress", r#"{"address":"100.64.0.1"}"#).unwrap(),
+        r#"{"isTailscale":true}"#
+    );
+    assert_eq!(
+        call("server.isTailscaleAddress", r#"{"address":"192.168.1.1"}"#).unwrap(),
+        r#"{"isTailscale":false}"#
+    );
+    let out: serde_json::Value = serde_json::from_str(
+        &call(
+            "server.pickIpAddress",
+            r#"{"addresses":[["en0","192.168.1.5"],["en1","192.168.2.9"]],"primary":"en1"}"#,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(out["address"], "192.168.2.9");
+    let out: serde_json::Value = serde_json::from_str(
+        &call(
+            "server.tailscaleAddress",
+            r#"{"addresses":[["en0","192.168.1.5"],["utun5","100.64.0.3"],["utun4","100.64.0.9"]]}"#,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(out["address"], "100.64.0.3");
+
+    // -- Bind/host resolution + fit target math. --
+    assert_eq!(
+        call(
+            "server.effectiveBindAddress",
+            r#"{"configured":"0.0.0.0","localAddrs":["192.168.1.5"]}"#
+        )
+        .unwrap(),
+        r#"{"address":"0.0.0.0"}"#
+    );
+    assert_eq!(
+        call(
+            "server.effectiveBindAddress",
+            r#"{"configured":"10.9.9.9","localAddrs":["192.168.1.5"]}"#
+        )
+        .unwrap(),
+        r#"{"address":null}"#
+    );
+    assert_eq!(
+        call(
+            "server.resolvedHost",
+            r#"{"effectiveBind":"0.0.0.0","addresses":[["en0","192.168.1.5"]],"primary":"en0"}"#
+        )
+        .unwrap(),
+        r#"{"host":"192.168.1.5"}"#
+    );
+    assert_eq!(
+        call(
+            "server.resolvedHost",
+            r#"{"effectiveBind":"100.64.0.1","addresses":[],"primary":null}"#
+        )
+        .unwrap(),
+        r#"{"host":"100.64.0.1"}"#
+    );
+    assert_eq!(
+        call("server.localHost", r#"{"effectiveBind":"0.0.0.0"}"#).unwrap(),
+        r#"{"host":"localhost"}"#
+    );
+    assert_eq!(
+        call(
+            "server.fitTargetMb",
+            r#"{"gpuWorkingSetMb":6144,"memoryMb":8192,"useFullWorkingSet":false}"#
+        )
+        .unwrap(),
+        r#"{"mb":2048}"#
+    );
+
+    // -- Preset rejection + model statuses. --
+    assert_eq!(
+        call(
+            "server.presetRejectionOption",
+            r#"{"message":"option 'temperture' not recognized in preset 'models.user.ini'\n"}"#,
+        )
+        .unwrap(),
+        r#"{"option":"temperture"}"#
+    );
+    assert_eq!(
+        json_call("server.presetRejectionOption", r#"{"message":"quiet"}"#),
+        r#"{"option":null}"#
+    );
+
+    let out: serde_json::Value = serde_json::from_str(
+        &call(
+            "server.parseModelStatuses",
+            r#"{"body":"{\"data\":[{\"id\":\"org/Model:Q4_0\",\"status\":{\"value\":\"loaded\"}}]}"}"#,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(out["statuses"][0][0], "org/Model:Q4_0");
+    assert_eq!(out["statuses"][0][1], "loaded");
+    let out: serde_json::Value =
+        serde_json::from_str(&call("server.parseModelStatuses", r#"{"body":"garbage"}"#).unwrap())
+            .unwrap();
+    assert_eq!(out["error"], "malformed");
+
+    // -- Reclaim port leaves. --
+    assert_eq!(
+        call("server.extractPids", r#"{"lsofOutput":"123\n456\n"}"#).unwrap(),
+        r#"{"pids":[123,456]}"#
+    );
+    assert_eq!(
+        call("server.isLlamaProcess", r#"{"comm":"/usr/sbin/lsof"}"#).unwrap(),
+        r#"{"isLlama":false}"#
+    );
+    assert_eq!(
+        call(
+            "server.lastPathComponent",
+            r#"{"path":"/opt/homebrew/bin/llama"}"#
+        )
+        .unwrap(),
+        r#"{"name":"llama"}"#
+    );
+
+    // -- buildLaunchSpec: full tree + effective webui (real index.html). --
+    let build = |json: serde_json::Value| -> serde_json::Value {
+        serde_json::from_str(&call("server.buildLaunchSpec", &json.to_string()).unwrap()).unwrap()
+    };
+    let spec = build(serde_json::json!({
+        "llamaPath": format!("{tmp}/bin/llama"),
+        "presetsPath": format!("{tmp}/models.ini"),
+        "logFilePath": format!("{tmp}/llama-server.log"),
+        "hfCacheDirectory": format!("{tmp}/hf-cache"),
+        "port": 9931,
+        "fitTargetMb": 1024,
+        "configuredBindAddress": "100.64.0.1",
+        "addresses": [["utun4", "100.64.0.1"], ["en0", "192.168.1.5"]],
+        "primaryInterface": "en0",
+        "currentVersionBuild": 11200,
+        "configuredWebUiDirectory": tmp,
+        "sleepIdleSeconds": null,
+        "agentMode": true,
+        "extraArgs": ["--ctx-size", "8192"],
+    }));
+    assert_eq!(spec["spec"]["executablePath"], format!("{tmp}/bin/llama"));
+    let args: Vec<String> = spec["spec"]["arguments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(args[13], "--host");
+    assert_eq!(args[14], "127.0.0.1,100.64.0.1");
+    assert_eq!(args.last().unwrap(), "8192");
+    assert_eq!(spec["spec"]["extraArgCount"], 2);
+    assert_eq!(spec["spec"]["env"][1][0], "HF_HUB_CACHE");
+
+    // stale bind falls back to unset => no --host argument
+    let spec = build(serde_json::json!({
+        "llamaPath": format!("{tmp}/bin/llama"),
+        "presetsPath": format!("{tmp}/models.ini"),
+        "logFilePath": format!("{tmp}/llama-server.log"),
+        "hfCacheDirectory": format!("{tmp}/hf-cache"),
+        "port": 9931,
+        "fitTargetMb": 1024,
+        "configuredBindAddress": "100.64.0.1",
+        "addresses": [["en0", "192.168.1.5"]],
+        "primaryInterface": "en0",
+        "currentVersionBuild": 11200,
+        "configuredWebUiDirectory": tmp,
+        "sleepIdleSeconds": null,
+        "agentMode": false,
+        "extraArgs": [],
+    }));
+    let args: Vec<String> = spec["spec"]["arguments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert!(!args.contains(&"--host".to_string()));
+    assert!(args.contains(&"--spec-default".to_string()));
+
+    // no binary => classified, not a panic.
+    let out: serde_json::Value = serde_json::from_str(
+        &call(
+            "server.buildLaunchSpec",
+            r#"{"llamaPath":null,"presetsPath":"/tmp/m","logFilePath":"/tmp/l","hfCacheDirectory":"/tmp/h","port":1,"fitTargetMb":0,"addresses":[],"extraArgs":[]}"#,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(out["error"], "noBinary");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Small alias to keep the JSON-string friction out of the test body.
+fn json_call(method: &str, args: &str) -> String {
+    call(method, args).unwrap()
+}

@@ -10,7 +10,7 @@
 
 use llama_core::config::{aliases, ini};
 use llama_core::engine::{
-    binaries, download, installer, mem_profile, partial_writer, LlamaVersion,
+    binaries, download, installer, mem_profile, partial_writer, server, LlamaVersion,
 };
 use llama_core::hf::{
     GGUFMetadata, GGUFQuant, HFCache, HFRepoParser, SidecarPicker, SideloadedEntry,
@@ -234,6 +234,28 @@ fn strings_from_value(v: &Value) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Decodes `[[k, v], ...]` into owned pairs (header/env/address lists).
+fn pairs_from_value(v: &Value) -> Vec<(String, String)> {
+    v.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|pair| {
+                    let p = pair.as_array()?;
+                    Some((
+                        p.first()?.as_str()?.to_string(),
+                        p.get(1)?.as_str()?.to_string(),
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Decodes `addresses` ([[interface, ip], ...]) in `args["addresses"]`.
+fn interface_adresses(args: &Value) -> Vec<(String, String)> {
+    pairs_from_value(args.get("addresses").unwrap_or(&Value::Null))
 }
 
 fn tiers_to_value(tiers: &[ContextTier]) -> Value {
@@ -1157,6 +1179,139 @@ fn dispatch(method: &str, args: &Value) -> Value {
                 .expect("partial writer registry poisoned")
                 .remove(&handle);
             json!({ "ok": true })
+        }
+
+        // ---- Fase 6: Server + syscalls leaves ----
+        "server.quote" => json!({ "quoted": server::shell_quote(arg_str("text")) }),
+        "server.displayCommand" => {
+            let env = pairs_from_value(args.get("env").unwrap_or(&Value::Null));
+            let spec = server::LaunchSpec {
+                executable_path: arg_str("executablePath").to_string(),
+                arguments: strings_from_value(args.get("arguments").unwrap_or(&Value::Null)),
+                extra_arg_count: args
+                    .get("extraArgCount")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0) as usize,
+                env,
+            };
+            json!({ "command": spec.display_command() })
+        }
+        "server.hostArgument" => {
+            let build = args
+                .get("versionBuild")
+                .and_then(Value::as_i64)
+                .map(|b| LlamaVersion { build: b });
+            json!({
+                "host": server::host_argument(arg_str("bindAddress"), build)
+            })
+        }
+        "server.isTailscaleAddress" => json!({
+            "isTailscale": server::is_tailscale_address(arg_str("address"))
+        }),
+        "server.pickIpAddress" => {
+            let addrs = interface_adresses(args);
+            json!({
+                "address": server::pick_ip_address(&addrs, args.get("primary").and_then(Value::as_str))
+            })
+        }
+        "server.tailscaleAddress" => {
+            let addrs = interface_adresses(args);
+            json!({ "address": server::tailscale_address(&addrs) })
+        }
+        "server.effectiveBindAddress" => json!({
+            "address": server::effective_bind_address(
+                args.get("configured").and_then(Value::as_str),
+                &strings_from_value(args.get("localAddrs").unwrap_or(&Value::Null)),
+            )
+        }),
+        "server.effectiveWebuiDirectory" => json!({
+            "directory": server::effective_webui_directory(
+                args.get("configured").and_then(Value::as_str),
+            )
+        }),
+        "server.localHost" => json!({
+            "host": server::local_host(args.get("effectiveBind").and_then(Value::as_str))
+        }),
+        "server.resolvedHost" => {
+            let addrs = interface_adresses(args);
+            json!({
+                "host": server::resolved_host(
+                    args.get("effectiveBind").and_then(Value::as_str),
+                    &addrs,
+                    args.get("primary").and_then(Value::as_str),
+                )
+            })
+        }
+        "server.fitTargetMb" => json!({
+            "mb": server::fit_target_mb(
+                arg_i("gpuWorkingSetMb"),
+                arg_i("memoryMb"),
+                args.get("useFullWorkingSet").and_then(Value::as_bool).unwrap_or(false),
+            )
+        }),
+        "server.presetRejectionOption" => json!({
+            "option": server::preset_rejection_option(arg_str("message"))
+        }),
+        "server.parseModelStatuses" => {
+            match server::parse_model_statuses(arg_str("body").as_bytes()) {
+                Some(statuses) => json!({
+                    "statuses": statuses
+                        .iter()
+                        .map(|(id, status)| json!([id, status]))
+                        .collect::<Vec<_>>(),
+                }),
+                None => json!({ "error": "malformed" }),
+            }
+        }
+        "server.extractPids" => json!({
+            "pids": server::extract_pids(arg_str("lsofOutput"))
+        }),
+        "server.isLlamaProcess" => json!({
+            "isLlama": server::is_llama_process(arg_str("comm"))
+        }),
+        "server.lastPathComponent" => json!({
+            "name": server::last_path_component(arg_str("path"))
+        }),
+        "server.buildLaunchSpec" => {
+            let addrs = interface_adresses(args);
+            let extra_args = strings_from_value(args.get("extraArgs").unwrap_or(&Value::Null));
+            let version_build = args
+                .get("currentVersionBuild")
+                .and_then(Value::as_i64)
+                .map(|b| LlamaVersion { build: b });
+            let input = server::LaunchSpecInput {
+                llama_path: args.get("llamaPath").and_then(Value::as_str),
+                presets_path: arg_str("presetsPath"),
+                log_file_path: arg_str("logFilePath"),
+                hf_cache_directory: arg_str("hfCacheDirectory"),
+                port: arg_i("port"),
+                fit_target_mb: arg_i("fitTargetMb"),
+                configured_bind_address: args.get("configuredBindAddress").and_then(Value::as_str),
+                address_by_interface: &addrs,
+                primary_interface: args.get("primaryInterface").and_then(Value::as_str),
+                current_version: version_build,
+                configured_webui_dir: args.get("configuredWebUiDirectory").and_then(Value::as_str),
+                sleep_idle_seconds: args.get("sleepIdleSeconds").and_then(Value::as_i64),
+                agent_mode: args
+                    .get("agentMode")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                extra_args: &extra_args,
+            };
+            match server::build_launch_spec(&input) {
+                Some(spec) => json!({
+                    "spec": {
+                        "executablePath": spec.executable_path,
+                        "arguments": spec.arguments,
+                        "extraArgCount": spec.extra_arg_count,
+                        "env": spec.env
+                            .iter()
+                            .map(|(k, v)| json!([k, v]))
+                            .collect::<Vec<_>>(),
+                    }
+                }),
+                None => json!({ "error": "noBinary" }),
+            }
         }
 
         // Smoke test for the event channel.

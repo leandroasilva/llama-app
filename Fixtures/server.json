@@ -1,0 +1,358 @@
+{
+  "quoteCases": [
+    { "name": "safe-path", "text": "/opt/homebrew/bin/llama", "quoted": "/opt/homebrew/bin/llama" },
+    { "name": "flag-equals", "text": "--fit-target=512", "quoted": "--fit-target=512" },
+    { "name": "space", "text": "Library/Application Support", "quoted": "'Library/Application Support'" },
+    { "name": "single-quote", "text": "a'b", "quoted": "'a'\\''b'" },
+    { "name": "unicode", "text": "ünïcode", "quoted": "ünïcode" }
+  ],
+  "displayCommandCases": [
+    {
+      "name": "with-exports-and-extra",
+      "executablePath": "/Users/x/llama",
+      "arguments": [
+        "serve",
+        "--models-preset",
+        "/Library/Application Support/Llama/models.ini",
+        "--log-file",
+        "/Users/x/Library/Logs/Llama/llama-server.log",
+        "--port",
+        "9931",
+        "--sleep-idle-seconds",
+        "300",
+        "--jinja",
+        "serve"
+      ],
+      "extraArgCount": 1,
+      "env": [
+        ["GGML_METAL_NO_RESIDENCY", "1"],
+        ["LLAMA_CACHE", "/tmp/llama-empty-cache"]
+      ],
+      "command": "export GGML_METAL_NO_RESIDENCY=1\nexport LLAMA_CACHE=/tmp/llama-empty-cache\n\n/Users/x/llama serve \\\n  --models-preset '/Library/Application Support/Llama/models.ini' \\\n  --log-file /Users/x/Library/Logs/Llama/llama-server.log \\\n  --port 9931 \\\n  --sleep-idle-seconds 300 \\\n  --jinja \\\n  serve  # custom arguments"
+    },
+    {
+      "name": "no-env-no-extra",
+      "executablePath": "/usr/local/bin/llama",
+      "arguments": ["serve", "--port", "8080"],
+      "extraArgCount": 0,
+      "env": [],
+      "command": "/usr/local/bin/llama serve \\\n  --port 8080"
+    }
+  ],
+  "hostArgumentCases": [
+    { "name": "new-engine-binds-list", "bindAddress": "100.64.0.1", "versionBuild": 11200, "expected": "127.0.0.1,100.64.0.1" },
+    { "name": "at-gate-inclusive", "bindAddress": "100.64.0.1", "versionBuild": 11104, "expected": "127.0.0.1,100.64.0.1" },
+    { "name": "below-gate-single", "bindAddress": "100.64.0.1", "versionBuild": 11103, "expected": "100.64.0.1" },
+    { "name": "unknown-version-single", "bindAddress": "100.64.0.1", "versionBuild": null, "expected": "100.64.0.1" },
+    { "name": "wildcard-passthrough", "bindAddress": "0.0.0.0", "versionBuild": 11200, "expected": "0.0.0.0" },
+    { "name": "loopback-passthrough", "bindAddress": "127.0.0.1", "versionBuild": 11200, "expected": "127.0.0.1" }
+  ],
+  "tailscaleCases": [
+    { "name": "low-bound", "ip": "100.64.0.1", "expected": true },
+    { "name": "high-bound", "ip": "100.127.255.255", "expected": true },
+    { "name": "above-range", "ip": "100.128.0.1", "expected": false },
+    { "name": "private-lan", "ip": "192.168.1.1", "expected": false },
+    { "name": "too-many-octets", "ip": "100.64.0.1.9", "expected": false },
+    { "name": "non-numeric", "ip": "x.64.0.1", "expected": false },
+    { "name": "empty", "ip": "", "expected": false }
+  ],
+  "pickIpCases": [
+    {
+      "name": "primary-interface-wins",
+      "addresses": [["en0", "192.168.1.5"], ["en1", "192.168.2.9"]],
+      "primary": "en1",
+      "expected": "192.168.2.9"
+    },
+    {
+      "name": "missing-primary-falls-back-sorted",
+      "addresses": [["en0", "192.168.1.5"], ["en1", "192.168.2.9"]],
+      "primary": "missing",
+      "expected": "192.168.1.5"
+    },
+    {
+      "name": "no-primary-sorted",
+      "addresses": [["en0", "192.168.1.5"], ["en1", "192.168.2.9"]],
+      "primary": null,
+      "expected": "192.168.1.5"
+    },
+    {
+      "name": "no-addresses",
+      "addresses": [],
+      "primary": null,
+      "expected": null
+    }
+  ],
+  "tailscaleAddressCases": [
+    {
+      "name": "picks-smallest-utun-cgnat",
+      "addresses": [
+        ["en0", "192.168.1.5"],
+        ["utun4", "100.64.0.9"],
+        ["utun5", "100.64.0.3"],
+        ["utun6", "10.0.0.1"]
+      ],
+      "expected": "100.64.0.3"
+    },
+    {
+      "name": "none-qualifies",
+      "addresses": [["en0", "192.168.1.5"], ["utun6", "10.0.0.1"]],
+      "expected": null
+    }
+  ],
+  "effectiveBindCases": [
+    {
+      "name": "held-address-passes",
+      "configured": "192.168.1.5",
+      "localAddrs": ["192.168.1.5"],
+      "expected": "192.168.1.5"
+    },
+    {
+      "name": "wildcard-always-binds",
+      "configured": "0.0.0.0",
+      "localAddrs": ["192.168.1.5"],
+      "expected": "0.0.0.0"
+    },
+    {
+      "name": "stale-address-falls-back",
+      "configured": "10.0.0.2",
+      "localAddrs": ["192.168.1.5"],
+      "expected": null
+    },
+    {
+      "name": "unset",
+      "configured": null,
+      "localAddrs": ["192.168.1.5"],
+      "expected": null
+    }
+  ],
+  "effectiveWebuiCases": [
+    { "name": "with-index", "dir": "<TMP>/webui", "indexed": true, "expected": "<TMP>/webui" },
+    { "name": "without-index", "dir": "<TMP>/nogood", "indexed": false, "expected": null }
+  ],
+  "localHostCases": [
+    { "name": "unset", "effectiveBind": null, "expected": "localhost" },
+    { "name": "wildcard", "effectiveBind": "0.0.0.0", "expected": "localhost" },
+    { "name": "specific", "effectiveBind": "100.64.0.1", "expected": "100.64.0.1" }
+  ],
+  "resolvedHostCases": [
+    {
+      "name": "unset",
+      "effectiveBind": null,
+      "addresses": [["en0", "192.168.1.5"]],
+      "primary": null,
+      "expected": "localhost"
+    },
+    {
+      "name": "specific",
+      "effectiveBind": "100.64.0.1",
+      "addresses": [["en0", "192.168.1.5"]],
+      "primary": null,
+      "expected": "100.64.0.1"
+    },
+    {
+      "name": "wildcard-resolves-to-ip",
+      "effectiveBind": "0.0.0.0",
+      "addresses": [["en0", "192.168.1.5"]],
+      "primary": "en0",
+      "expected": "192.168.1.5"
+    },
+    {
+      "name": "wildcard-no-ip",
+      "effectiveBind": "0.0.0.0",
+      "addresses": [],
+      "primary": null,
+      "expected": "0.0.0.0"
+    }
+  ],
+  "fitTargetCases": [
+    { "name": "small-mac", "gpuWorkingSetMb": 6144, "memoryMb": 8192, "useFullWorkingSet": false, "expected": 2048 },
+    { "name": "small-mac-full-inert", "gpuWorkingSetMb": 6144, "memoryMb": 8192, "useFullWorkingSet": true, "expected": 2048 },
+    { "name": "roomy-mac", "gpuWorkingSetMb": 98304, "memoryMb": 131072, "useFullWorkingSet": false, "expected": 1024 },
+    { "name": "roomy-mac-full-spends-slack", "gpuWorkingSetMb": 98304, "memoryMb": 131072, "useFullWorkingSet": true, "expected": 0 }
+  ],
+  "presetRejectionCases": [
+    {
+      "name": "single",
+      "message": "llama-server: error: failed to parse preset\noption 'temperture' not recognized in preset 'models.user.ini'\n",
+      "expected": "temperture"
+    },
+    {
+      "name": "last-line-wins",
+      "message": "first line\noption 'alpha' not recognized in preset 'x'\noption 'beta' not recognized in preset 'x'\n",
+      "expected": "beta"
+    },
+    {
+      "name": "no-match",
+      "message": "all quiet on the preset front",
+      "expected": null
+    }
+  ],
+  "modelsStatusCases": [
+    {
+      "name": "valid-and-missing-status",
+      "body": "{\"data\":[{\"id\":\"org/Model:Q4_0\",\"status\":{\"value\":\"loaded\"}},{\"id\":\"org/Other\",\"status\":{\"value\":\"sleeping\"}},{\"id\":\"org/Missing\"}]}",
+      "statuses": [
+        ["org/Model:Q4_0", "loaded"],
+        ["org/Other", "sleeping"],
+        ["org/Missing", "unloaded"]
+      ]
+    },
+    {
+      "name": "unknown-state-normalized",
+      "body": "{\"data\":[{\"id\":\"m\",\"status\":{\"value\":\"bogus\"}}]}",
+      "statuses": [["m", "unloaded"]]
+    },
+    {
+      "name": "non-string-id-fails",
+      "body": "{\"data\":[{\"id\":7}]}",
+      "statuses": null
+    },
+    {
+      "name": "not-json-fails",
+      "body": "not json",
+      "statuses": null
+    },
+    {
+      "name": "data-not-array-fails",
+      "body": "{\"data\":5}",
+      "statuses": null
+    }
+  ],
+  "reclaimCases": [
+    { "name": "pids-basic", "lsofOutput": "123\n456\n", "pids": [123, 456] },
+    { "name": "pids-crlf-and-blank", "lsofOutput": "\n\r1\n2\r\n3\n", "pids": [1, 2, 3] },
+    { "name": "pids-skips-junk", "lsofOutput": "wat\n7\n", "pids": [7] },
+    { "name": "pids-empty", "lsofOutput": "", "pids": [] },
+    {
+      "name": "comms",
+      "comms": [
+        { "comm": "/Users/x/llama", "isLlama": true },
+        { "comm": "llama", "isLlama": true },
+        { "comm": "/usr/sbin/lsof", "isLlama": false },
+        { "comm": "nothing", "isLlama": false }
+      ]
+    },
+    {
+      "name": "paths",
+      "paths": [
+        { "path": "llama", "name": "llama" },
+        { "path": "/opt/homebrew/bin/llama", "name": "llama" },
+        { "path": "/usr/sbin/lsof", "name": "lsof" },
+        { "path": "app/", "name": "app" }
+      ]
+    }
+  ],
+  "buildLaunchSpecCases": [
+    {
+      "name": "defaults-with-webui",
+      "llamaPath": "<TMP>/bin/llama",
+      "presetsPath": "<TMP>/Library/Application Support/Llama/models.ini",
+      "logFilePath": "<TMP>/Library/Logs/Llama/llama-server.log",
+      "hfCacheDirectory": "<TMP>/Library/Caches/Llama",
+      "port": 9931,
+      "fitTargetMb": 1024,
+      "configuredBindAddress": null,
+      "addresses": [["en0", "192.168.1.5"]],
+      "primaryInterface": "en0",
+      "versionBuild": null,
+      "configuredWebUiDirectory": "<TMP>/webui",
+      "sleepIdleSeconds": 300,
+      "agentMode": false,
+      "extraArgs": [],
+      "spec": {
+        "executablePath": "<TMP>/bin/llama",
+        "arguments": [
+          "serve",
+          "--models-preset",
+          "<TMP>/Library/Application Support/Llama/models.ini",
+          "--log-file",
+          "<TMP>/Library/Logs/Llama/llama-server.log",
+          "--path",
+          "<TMP>/webui",
+          "--port",
+          "9931",
+          "--models-max",
+          "1",
+          "--fit-target",
+          "1024",
+          "--sleep-idle-seconds",
+          "300",
+          "--jinja",
+          "--spec-default"
+        ],
+        "extraArgCount": 0,
+        "env": [
+          ["GGML_METAL_NO_RESIDENCY", "1"],
+          ["HF_HUB_CACHE", "<TMP>/Library/Caches/Llama"],
+          ["LLAMA_CACHE", "/tmp/llama-empty-cache"]
+        ]
+      }
+    },
+    {
+      "name": "tailscale-bind-agent-extra",
+      "llamaPath": "<TMP>/bin/llama",
+      "presetsPath": "<TMP>/models.ini",
+      "logFilePath": "<TMP>/llama-server.log",
+      "hfCacheDirectory": "<TMP>/hf-cache",
+      "port": 9931,
+      "fitTargetMb": 1024,
+      "configuredBindAddress": "100.64.0.1",
+      "addresses": [["utun4", "100.64.0.1"], ["en0", "192.168.1.5"]],
+      "primaryInterface": "en0",
+      "versionBuild": 11200,
+      "configuredWebUiDirectory": "<TMP>/webui",
+      "sleepIdleSeconds": null,
+      "agentMode": true,
+      "extraArgs": ["--ctx-size", "8192"],
+      "spec": {
+        "executablePath": "<TMP>/bin/llama",
+        "arguments": [
+          "serve",
+          "--models-preset",
+          "<TMP>/models.ini",
+          "--log-file",
+          "<TMP>/llama-server.log",
+          "--path",
+          "<TMP>/webui",
+          "--port",
+          "9931",
+          "--models-max",
+          "1",
+          "--fit-target",
+          "1024",
+          "--host",
+          "127.0.0.1,100.64.0.1",
+          "--jinja",
+          "--spec-default",
+          "--agent",
+          "--ctx-size",
+          "8192"
+        ],
+        "extraArgCount": 2,
+        "env": [
+          ["GGML_METAL_NO_RESIDENCY", "1"],
+          ["HF_HUB_CACHE", "<TMP>/hf-cache"],
+          ["LLAMA_CACHE", "/tmp/llama-empty-cache"]
+        ]
+      }
+    },
+    {
+      "name": "no-binary",
+      "llamaPath": null,
+      "presetsPath": "<TMP>/models.ini",
+      "logFilePath": "<TMP>/llama-server.log",
+      "hfCacheDirectory": "<TMP>/hf-cache",
+      "port": 9931,
+      "fitTargetMb": 0,
+      "configuredBindAddress": null,
+      "addresses": [],
+      "primaryInterface": null,
+      "versionBuild": null,
+      "configuredWebUiDirectory": null,
+      "sleepIdleSeconds": null,
+      "agentMode": false,
+      "extraArgs": [],
+      "spec": null
+    }
+  ]
+}
