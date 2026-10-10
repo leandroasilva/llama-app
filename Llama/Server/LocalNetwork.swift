@@ -23,25 +23,8 @@ enum LocalNetwork {
   /// `en1` on one plugged into Ethernet. Read from the dynamic store rather
   /// than assumed, because which interface that is varies per machine -- the
   /// old hardcoded `en0` was wrong on any Mac whose primary link isn't Wi-Fi.
-  private static func primaryInterfaceName() -> String? {
+  static func primaryInterfaceName() -> String? {
     globalIPv4State()?["PrimaryInterface"] as? String
-  }
-
-  /// The Mac's own IPv4 address on the network, for showing a URL other
-  /// devices can reach.
-  ///
-  /// Prefers the interface holding the default route. Falls back to any
-  /// non-loopback IPv4 so a machine with no default route (an isolated LAN,
-  /// or Wi-Fi off with only a VPN up) still shows something reachable rather
-  /// than the unusable `0.0.0.0`.
-  static func ipAddress() -> String? {
-    let addresses = ipv4Addresses()
-    if let primary = primaryInterfaceName(), let match = addresses[primary] {
-      return match
-    }
-    // No default route, or its interface has no IPv4 -- take whatever else is
-    // up. Sorted for a stable pick: two runs shouldn't show different URLs.
-    return addresses.values.sorted().first
   }
 
   /// Non-loopback IPv4 addresses, keyed by interface name. `TailscaleInterface`

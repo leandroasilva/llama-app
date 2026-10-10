@@ -42,12 +42,14 @@ struct LlamaServerAPI {
   func fetchModelStatuses() async -> [String: ModelLoadState]? {
     guard let data = await get(endpoint: "models") else { return nil }
 
-    guard let response = try? JSONDecoder().decode(ModelsResponse.self, from: data) else {
-      return nil
-    }
+    guard
+      let statuses: [[String]] = LlamaCore.callValue(
+        "server.parseModelStatuses", "statuses", ["body": String(decoding: data, as: UTF8.self)])
+    else { return nil }
 
-    return response.data.reduce(into: [String: ModelLoadState]()) { dict, item in
-      dict[item.id] = item.status.flatMap { ModelLoadState(rawValue: $0.value) } ?? .unloaded
+    return statuses.reduce(into: [String: ModelLoadState]()) { dict, pair in
+      guard pair.count == 2 else { return }
+      dict[pair[0]] = ModelLoadState(rawValue: pair[1]) ?? .unloaded
     }
   }
 
@@ -110,16 +112,4 @@ struct LlamaServerAPI {
     }
   }
 
-  // MARK: - Response Types
-
-  private struct ModelsResponse: Decodable {
-    struct ModelData: Decodable {
-      let id: String
-      let status: ModelStatus?
-    }
-    struct ModelStatus: Decodable {
-      let value: String
-    }
-    let data: [ModelData]
-  }
 }

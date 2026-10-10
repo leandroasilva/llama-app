@@ -22,9 +22,7 @@ enum TailscaleInterface {
   ///
   /// Tailscale hands out addresses from the CGNAT range, 100.64.0.0/10.
   static func isTailscaleAddress(_ ip: String) -> Bool {
-    let parts = ip.split(separator: ".").compactMap { Int($0) }
-    guard parts.count == 4, parts[0] == 100 else { return false }
-    return (64...127).contains(parts[1])
+    LlamaCore.callValue("server.isTailscaleAddress", "isTailscale", ["address": ip]) ?? false
   }
 
   /// This Mac's Tailscale address, or nil when Tailscale isn't running or is
@@ -35,11 +33,9 @@ enum TailscaleInterface {
   /// carrier's CGNAT address instead of a private overlay would be precisely
   /// the wrong outcome.
   static func address() -> String? {
-    LocalNetwork.ipv4Addresses()
-      .filter { $0.key.hasPrefix("utun") && isTailscaleAddress($0.value) }
-      .values
-      .sorted()  // stable when more than one utun qualifies
-      .first
+    LlamaCore.callValue(
+      "server.tailscaleAddress", "address",
+      ["addresses": LocalNetwork.ipv4Addresses().map { [$0.key, $0.value] }])
   }
 
   /// Whether `address` is the one this Mac holds right now. False for a

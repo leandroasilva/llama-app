@@ -76,13 +76,9 @@ class LlamaServer {
   ///
   /// `0.0.0.0` isn't an interface address and always binds, so it's taken as-is.
   nonisolated static var effectiveBindAddress: String? {
-    guard let configured = UserSettings.networkBindAddress else { return nil }
-    guard configured != "0.0.0.0" else { return configured }
-    guard LocalNetwork.ipv4Addresses().values.contains(configured) else {
-      logger.notice("configured bind address is not on any interface -- using loopback")
-      return nil
-    }
-    return configured
+    var args: [String: Any] = ["localAddrs": Array(LocalNetwork.ipv4Addresses().values)]
+    if let configured = UserSettings.networkBindAddress { args["configured"] = configured }
+    return LlamaCore.callValue("server.effectiveBindAddress", "address", args)
   }
 
   /// The custom web app folder the server will actually serve, which is the
@@ -96,11 +92,8 @@ class LlamaServer {
   /// start serves it again.
   nonisolated static var effectiveWebUIDirectory: String? {
     guard let dir = UserSettings.customWebUIDirectory else { return nil }
-    guard hasIndexPage(dir) else {
-      logger.notice("custom web app folder has no index.html -- using the built-in web UI")
-      return nil
-    }
-    return dir.path
+    return LlamaCore.callValue(
+      "server.effectiveWebuiDirectory", "directory", ["configured": dir.path])
   }
 
   /// Whether `dir` has the `index.html` the server hands out for `/`. The
@@ -114,12 +107,12 @@ class LlamaServer {
   /// If network bind address is set, uses that (resolving 0.0.0.0 to the actual local IP).
   /// Otherwise defaults to "localhost".
   static var resolvedHost: String {
-    if let bindAddr = effectiveBindAddress {
-      return bindAddr == "0.0.0.0"
-        ? (LocalNetwork.ipAddress() ?? "0.0.0.0")
-        : bindAddr
-    }
-    return "localhost"
+    var args: [String: Any] = [
+      "addresses": LocalNetwork.ipv4Addresses().map { [$0.key, $0.value] }
+    ]
+    if let bind = effectiveBindAddress { args["effectiveBind"] = bind }
+    if let primary = LocalNetwork.primaryInterfaceName() { args["primary"] = primary }
+    return LlamaCore.callValue("server.resolvedHost", "host", args) ?? "localhost"
   }
 
   /// The host the app itself should use to reach the server.
@@ -131,8 +124,9 @@ class LlamaServer {
   /// which keeps this independent of the engine version. `0.0.0.0` already
   /// includes loopback, so localhost stays the cheapest way in.
   nonisolated static var localHost: String {
-    guard let bindAddr = effectiveBindAddress, bindAddr != "0.0.0.0" else { return "localhost" }
-    return bindAddr
+    var args: [String: Any] = [:]
+    if let bind = effectiveBindAddress { args["effectiveBind"] = bind }
+    return LlamaCore.callValue("server.localHost", "host", args) ?? "localhost"
   }
 
   /// Webui URL with the given model preselected via the `?model=` query param
@@ -169,9 +163,6 @@ class LlamaServer {
   private var startTask: Task<Void, Never>?
   private var healthCheckTask: Task<Void, Error>?
   private let logger = Logger(subsystem: Logging.subsystem, category: "LlamaServer")
-  /// Static counterpart, for the type-level helpers (bind-address resolution).
-  nonisolated private static let logger = Logger(
-    subsystem: Logging.subsystem, category: "LlamaServer")
   private let api = LlamaServerAPI()
 
   enum ServerState: Equatable {
@@ -252,12 +243,10 @@ class LlamaServer {
   /// too, which is jargon the app never shows and makes for a hint too wide to
   /// read; the whole line is already in the log for anyone debugging.
   private func notePresetRejection(in message: String) {
-    for line in message.components(separatedBy: .newlines)
-    where line.contains("not recognized in preset") {
-      guard let start = line.range(of: "option '"),
-        let end = line[start.upperBound...].firstIndex(of: "'")
-      else { continue }
-      rejectedOption = String(line[start.upperBound..<end])
+    if let option: String = LlamaCore.callValue(
+      "server.presetRejectionOption", "option", ["message": message])
+    {
+      rejectedOption = option
     }
   }
 
@@ -311,78 +300,19 @@ class LlamaServer {
     let env: [(key: String, value: String)]
 
     /// A reading-friendly rendering of the command: the env vars as plain
-    /// `export` statements up top (each flush-left on its own line), a blank
-    /// line, then the invocation -- the binary and subcommand on one line, with
-    /// each `--flag` (grouped with its value) hanging-indented below. Paths are
-    /// shown literally and shell-quoted where needed, so the block stays
-    /// paste-and-run correct and shows exactly what runs.
+    /// `export` statements up top, then the invocation -- the binary and
+    /// subcommand on one line, with each `--flag` (grouped with its value)
+    /// hanging-indented below, shell-quoted where needed so the block stays
+    /// paste-and-run correct. Rendered by the Rust core (`server.displayCommand`).
     var displayCommand: String {
-      // Group the app-managed arguments so a `--flag` carries its following
-      // value(s) on one line; bare positional args (like `serve`) stand alone.
-      // User-supplied extra args (the trailing `extraArgCount` elements) are
-      // handled separately below.
-      let managed = arguments.dropLast(extraArgCount)
-      var lines: [String] = []
-      var idx = managed.startIndex
-      while idx < managed.endIndex {
-        let arg = managed[idx]
-        let next = managed.index(after: idx)
-        if arg.hasPrefix("-"), next < managed.endIndex,
-          !managed[next].hasPrefix("-")
-        {
-          lines.append("\(arg) \(Self.quote(managed[next]))")
-          idx = managed.index(after: next)
-        } else {
-          lines.append(Self.quote(arg))
-          idx = next
-        }
-      }
-
-      // The binary leads the command line. Any leading positional args (the
-      // subcommand, e.g. `serve`) ride on that same line -- `llama serve` reads
-      // as one unit -- and the flags follow, one per line.
-      var firstLine = Self.quote(executablePath)
-      while let head = lines.first, !head.hasPrefix("-") {
-        firstLine += " " + head
-        lines.removeFirst()
-      }
-
-      // User-supplied extra args: all on one line, tagged with a comment so a
-      // reader can tell them apart from the app's own flags. Appended after
-      // the positional-absorption loop above so the loop can't swallow them,
-      // and safe only because this is the *last* line -- a `#` comment would
-      // swallow a trailing `\` continuation on any earlier line.
-      if extraArgCount > 0 {
-        let extra = arguments.suffix(extraArgCount).map(Self.quote).joined(separator: " ")
-        lines.append("\(extra)  # custom arguments")
-      }
-
-      // Env vars as standalone `export` statements -- each flush-left on its
-      // own line, no continuation backslash, so the setup reads as a calm list
-      // separate from the invocation below.
-      let exportLines = env.map { "export \($0.key)=\(Self.quote($0.value))" }
-
-      // The invocation: binary + subcommand on the first line, each flag
-      // hanging-indented below, joined by " \<newline>" so it stays runnable.
-      let cmdLines = [firstLine] + lines
-      let cmdBlock = cmdLines.enumerated().map { i, line in
-        let prefix = i == 0 ? "" : "  "
-        let suffix = i == cmdLines.count - 1 ? "" : " \\"
-        return prefix + line + suffix
-      }.joined(separator: "\n")
-
-      // A blank line sets the exports apart from the command they precede
-      // (no exports -> no leading blank line).
-      return (exportLines.isEmpty ? [cmdBlock] : exportLines + ["", cmdBlock])
-        .joined(separator: "\n")
-    }
-
-    /// Minimal shell quoting: wraps a token in single quotes only if it
-    /// contains characters that the shell would otherwise treat specially.
-    private static func quote(_ s: String) -> String {
-      guard s.contains(where: { !$0.isLetter && !$0.isNumber && !"-_./=:".contains($0) })
-      else { return s }
-      return "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+      LlamaCore.callValue(
+        "server.displayCommand", "command",
+        [
+          "executablePath": executablePath,
+          "arguments": arguments,
+          "extraArgCount": extraArgCount,
+          "env": env.map { [$0.key, $0.value] },
+        ]) ?? ""
     }
   }
 
@@ -411,15 +341,17 @@ class LlamaServer {
   /// whenever the address went away and we fell back to loopback. Listing
   /// loopback alongside keeps localhost working in every mode.
   ///
-  /// Only engines from `multiHostVersion` on accept a list; older ones (and an
-  /// unreadable version) get the single address, as before. `0.0.0.0` already
-  /// covers loopback, and repeating `127.0.0.1` would fail the second bind.
+  /// Only engines new enough to accept a comma-separated host list do; older
+  /// ones (and an unreadable version) get the single address, as before.
+  /// `0.0.0.0` already covers loopback, and repeating `127.0.0.1` would fail
+  /// the second bind. The version gate itself lives in the Rust core
+  /// (`server.hostArgument`).
   private static func hostArgument(for bindAddress: String) -> String {
-    guard bindAddress != "0.0.0.0", bindAddress != "127.0.0.1",
-      let version = LlamaInstallManager.shared.currentVersion,
-      version >= LlamaBinaries.multiHostVersion
-    else { return bindAddress }
-    return "127.0.0.1,\(bindAddress)"
+    var args: [String: Any] = ["bindAddress": bindAddress]
+    if let build = LlamaInstallManager.shared.currentVersion?.build {
+      args["versionBuild"] = build
+    }
+    return LlamaCore.callValue("server.hostArgument", "host", args) ?? bindAddress
   }
 
   /// Builds the `llama serve` launch spec from the current settings. Pure with
@@ -429,70 +361,44 @@ class LlamaServer {
   static func buildLaunchSpec() -> LaunchSpec? {
     guard let llamaPath = LlamaBinaries.llamaPath else { return nil }
 
-    let presetsPath = UserSettings.appSupportDir.appendingPathComponent("models.ini").path
-
-    let env = [
-      (key: "GGML_METAL_NO_RESIDENCY", value: "1"),
-      // Set HF_HUB_CACHE so llama-server can resolve model paths in preset
-      (key: "HF_HUB_CACHE", value: UserSettings.hfCacheDirectory.path),
-      (key: "LLAMA_CACHE", value: Self.emptyCachePath),
+    var args: [String: Any] = [
+      "llamaPath": llamaPath,
+      "presetsPath": UserSettings.appSupportDir.appendingPathComponent("models.ini").path,
+      "logFilePath": Self.logFilePath,
+      "hfCacheDirectory": UserSettings.hfCacheDirectory.path,
+      "port": Self.port,
+      "fitTargetMb": Int(Model.fitTargetMb),
+      "addresses": LocalNetwork.ipv4Addresses().map { [$0.key, $0.value] },
+      "agentMode": UserSettings.agentMode,
+      "extraArgs": UserSettings.extraServerArgList,
     ]
-
-    // Order here is purely cosmetic (`serve` ignores flag order) -- it's
-    // chosen so the rendered command reads well: the two path flags grouped up
-    // top, then the remaining value-taking flags, and the bare toggles last.
-    var arguments = [
-      // `serve` is the `llama` subcommand that replaces the old `llama-server`.
-      "serve",
-      // Path flags, grouped together.
-      "--models-preset", presetsPath,
-      "--log-file", Self.logFilePath,
-    ]
-
-    // Custom web app: serve the user's folder at `/` instead of the built-in
-    // chat. The API routes are unaffected. Kept with the other path flags.
-    if let webUIDirectory = effectiveWebUIDirectory {
-      arguments.append(contentsOf: ["--path", webUIDirectory])
+    if let bind = UserSettings.networkBindAddress { args["configuredBindAddress"] = bind }
+    if let primary = LocalNetwork.primaryInterfaceName() { args["primaryInterface"] = primary }
+    if let build = LlamaInstallManager.shared.currentVersion?.build {
+      args["currentVersionBuild"] = build
     }
-
-    arguments.append(contentsOf: [
-      // Other value-taking flags.
-      "--port", String(Self.port),
-      "--models-max", "1",
-      "--fit-target", String(Int(Model.fitTargetMb)),
-    ])
-
-    // Bind to custom address if network exposure is enabled
-    if let bindAddress = effectiveBindAddress {
-      arguments.append(contentsOf: ["--host", hostArgument(for: bindAddress)])
+    if let webui = UserSettings.customWebUIDirectory {
+      args["configuredWebUiDirectory"] = webui.path
     }
-
-    // Unload model from memory when idle
     if UserSettings.sleepIdleTime != .disabled {
-      arguments.append(contentsOf: [
-        "--sleep-idle-seconds", String(UserSettings.sleepIdleTime.rawValue),
-      ])
+      args["sleepIdleSeconds"] = UserSettings.sleepIdleTime.rawValue
     }
 
-    // Bare toggles (no value) last, so they don't split the value flags above.
-    arguments.append(contentsOf: ["--jinja", "--spec-default"])
+    guard let response = LlamaCore.callJSON("server.buildLaunchSpec", args),
+      let spec = response["spec"] as? [String: Any],
+      let executablePath = spec["executablePath"] as? String,
+      let arguments = spec["arguments"] as? [String],
+      let extraArgCount = spec["extraArgCount"] as? Int,
+      let envPairs = spec["env"] as? [[String]]
+    else { return nil }
 
-    // Agent mode: enables the server's built-in tools and the UI's CORS/MCP
-    // proxy. Opt-in via Settings; off by default because it lets models act
-    // on the local machine.
-    if UserSettings.agentMode {
-      arguments.append("--agent")
+    let env = envPairs.compactMap { pair -> (key: String, value: String)? in
+      guard pair.count == 2 else { return nil }
+      return (key: pair[0], value: pair[1])
     }
-
-    // User-supplied extra args (the `extraServerArgs` default) go at the very
-    // end, so where llama-server honors the later occurrence they can
-    // override the app's own flags. Passed verbatim -- no validation; a bad
-    // flag surfaces as a launch failure like any other server error.
-    let extraArgs = UserSettings.extraServerArgList
-    arguments.append(contentsOf: extraArgs)
 
     return LaunchSpec(
-      executablePath: llamaPath, arguments: arguments, extraArgCount: extraArgs.count, env: env)
+      executablePath: executablePath, arguments: arguments, extraArgCount: extraArgCount, env: env)
   }
 
   /// Reclaims `port` by killing any stray `llama serve` still listening on it.
@@ -519,9 +425,10 @@ class LlamaServer {
     lsof.waitUntilExit()
 
     let out = pipe.fileHandleForReading.readDataToEndOfFile()
-    let pids = String(decoding: out, as: UTF8.self)
-      .split(whereSeparator: \.isNewline)
-      .compactMap { pid_t($0) }
+    let rawPids: [Int] = LlamaCore.callValue(
+      "server.extractPids", "pids",
+      ["lsofOutput": String(decoding: out, as: UTF8.self)]) ?? []
+    let pids = rawPids.map { pid_t($0) }
 
     // The first non-`llama` process found holding the port, if any -- reported
     // back so the caller can name it in the conflict error.
@@ -542,12 +449,12 @@ class LlamaServer {
       let comm = String(decoding: psPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         .trimmingCharacters(in: .whitespacesAndNewlines)
 
-      if comm.hasSuffix("llama") {
+      if LlamaCore.callValue("server.isLlamaProcess", "isLlama", ["comm": comm]) ?? false {
         kill(pid, SIGKILL)
       } else if !comm.isEmpty, blocker == nil {
         // A process we won't touch -- keep just its name (not the full path) for
         // a user-facing message.
-        blocker = URL(fileURLWithPath: comm).lastPathComponent
+        blocker = LlamaCore.callValue("server.lastPathComponent", "name", ["path": comm])
       }
     }
 
