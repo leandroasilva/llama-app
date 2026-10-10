@@ -8,6 +8,7 @@
 //!   boundary (which would be undefined behavior).
 //! - Complex payloads travel as JSON; this keeps the ABI small and stable.
 
+use llama_core::config::core_config::CoreConfig;
 use llama_core::config::{aliases, ini};
 use llama_core::engine::{
     binaries, download, installer, mem_profile, partial_writer, server, LlamaVersion,
@@ -1339,6 +1340,34 @@ fn dispatch(method: &str, args: &Value) -> Value {
             let payload = args.get("payload").cloned().unwrap_or(Value::Null);
             emit(&json!({ "event": "test", "payload": payload }));
             json!({ "ok": true })
+        }
+
+        // ---- Fase 7: config snapshot + event channel ----
+
+        // Returns a snapshot envelope `{schemaVersion, config}` whose `config`
+        // is the canonical `CoreConfig` the host last pushed (via
+        // `llama_core_init` / `llama_core_set_config`), always fully populated
+        // with the schema version stamped.
+        "core.snapshot" => {
+            let cfg = core()
+                .lock()
+                .ok()
+                .map(|c| CoreConfig::from_value(&c.config))
+                .unwrap_or_default();
+            json!({
+                "schemaVersion": llama_core::config::CORE_CONFIG_SCHEMA_VERSION,
+                "config": cfg.to_value(),
+            })
+        }
+
+        // Emits a semantic event over the host callback. Unknown kinds are still
+        // forwarded (the host decides), but `known` reports whether the core
+        // recognizes it.
+        "event.emit" => {
+            let kind = arg_str("kind");
+            let payload = args.get("payload").cloned().unwrap_or(Value::Null);
+            emit(&llama_core::events::event_value(kind, payload));
+            json!({ "ok": true, "known": llama_core::events::is_known_event(kind) })
         }
 
         other => json!({ "error": format!("unknown method: {other}") }),

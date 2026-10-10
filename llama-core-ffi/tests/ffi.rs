@@ -51,11 +51,45 @@ fn dispatch_returns_json() {
 }
 
 #[test]
-fn config_push_succeeds() {
+fn config_push_and_snapshot() {
     assert_eq!(unsafe { llama_core_init(std::ptr::null()) }, 0);
-    let cfg = CString::new(r#"{"threads":4}"#).unwrap();
+
+    // Compare parsed values so the test doesn't depend on JSON key order.
+    let snapshot = |json: &str| serde_json::from_str::<serde_json::Value>(json).unwrap();
+    let config_of = |v: &serde_json::Value| v["config"].clone();
+
+    // With no config pushed, the snapshot is the canonical default.
+    assert_eq!(
+        config_of(&snapshot(&call("core.snapshot", "{}").unwrap())),
+        snapshot(
+            r#"{"schemaVersion":1,"hfCacheDirectory":"","hfToken":null,"serverPort":0,"sleepIdleSeconds":null,"agentMode":false,"extraServerArgs":[],"customWebUIDirectory":null,"gpuWorkingSetMb":null,"systemMemoryMb":null,"networkAvailable":true}"#
+        )
+    );
+
+    let cfg = CString::new(
+        r#"{"hfCacheDirectory":"/tmp/hf","serverPort":8080,"agentMode":true,"networkAvailable":false}"#,
+    )
+    .unwrap();
     assert_eq!(unsafe { llama_core_set_config(cfg.as_ptr()) }, 0);
     assert_eq!(unsafe { llama_core_init(cfg.as_ptr()) }, 0);
+
+    // The snapshot reflects the pushed config, canonicalized (unknown keys
+    // dropped, missing keys defaulted); the envelope carries the schema version.
+    let snap = snapshot(&call("core.snapshot", "{}").unwrap());
+    assert_eq!(snap["schemaVersion"], serde_json::json!(1));
+    assert_eq!(
+        config_of(&snap),
+        snapshot(
+            r#"{"schemaVersion":1,"hfCacheDirectory":"/tmp/hf","hfToken":null,"serverPort":8080,"sleepIdleSeconds":null,"agentMode":true,"extraServerArgs":[],"customWebUIDirectory":null,"gpuWorkingSetMb":null,"systemMemoryMb":null,"networkAvailable":false}"#
+        )
+    );
+
+    // Unknown keys are ignored without error.
+    let cfg = CString::new(r#"{"threads":4}"#).unwrap();
+    assert_eq!(unsafe { llama_core_set_config(cfg.as_ptr()) }, 0);
+    assert!(call("core.snapshot", "{}")
+        .unwrap()
+        .contains(r#""serverPort":0"#));
 }
 
 static EVENTS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
@@ -81,12 +115,29 @@ fn event_channel_delivers() {
         call("emit.test", r#"{"payload":{"n":1}}"#).unwrap(),
         r#"{"ok":true}"#
     );
+    // Semantic events carry the kind + payload; `known` reports whether the core
+    // recognizes the kind.
+    assert_eq!(
+        call(
+            "event.emit",
+            r#"{"kind":"serverState","payload":{"state":"running"}}"#
+        )
+        .unwrap(),
+        r#"{"known":true,"ok":true}"#
+    );
+    assert_eq!(
+        call("event.emit", r#"{"kind":"mystery"}"#).unwrap(),
+        r#"{"known":false,"ok":true}"#
+    );
     unsafe { llama_core_set_event_cb(None) };
 
     let events = EVENTS.get().unwrap().lock().unwrap();
-    assert_eq!(events.len(), 1);
+    assert_eq!(events.len(), 3);
     assert!(events[0].contains(r#""event":"test""#));
     assert!(events[0].contains(r#""n":1"#));
+    assert!(events[1].contains(r#""event":"serverState""#));
+    assert!(events[1].contains(r#""state":"running""#));
+    assert!(events[2].contains(r#""event":"mystery""#));
 }
 
 #[test]

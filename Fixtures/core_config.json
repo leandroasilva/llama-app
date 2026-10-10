@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "name": "empty",
+      "input": {},
+      "normalized": {
+        "schemaVersion": 1,
+        "hfCacheDirectory": "",
+        "hfToken": null,
+        "serverPort": 0,
+        "sleepIdleSeconds": null,
+        "agentMode": false,
+        "extraServerArgs": [],
+        "customWebUIDirectory": null,
+        "gpuWorkingSetMb": null,
+        "systemMemoryMb": null,
+        "networkAvailable": true
+      }
+    },
+    {
+      "name": "full",
+      "input": {
+        "hfCacheDirectory": "/tmp/hf",
+        "hfToken": "hf_abc",
+        "serverPort": 8080,
+        "sleepIdleSeconds": 900,
+        "agentMode": true,
+        "extraServerArgs": ["--verbose", "--no-mmap"],
+        "customWebUIDirectory": "/tmp/webui",
+        "gpuWorkingSetMb": 12288,
+        "systemMemoryMb": 16384,
+        "networkAvailable": false
+      },
+      "normalized": {
+        "schemaVersion": 1,
+        "hfCacheDirectory": "/tmp/hf",
+        "hfToken": "hf_abc",
+        "serverPort": 8080,
+        "sleepIdleSeconds": 900,
+        "agentMode": true,
+        "extraServerArgs": ["--verbose", "--no-mmap"],
+        "customWebUIDirectory": "/tmp/webui",
+        "gpuWorkingSetMb": 12288,
+        "systemMemoryMb": 16384,
+        "networkAvailable": false
+      }
+    },
+    {
+      "name": "partial",
+      "input": { "serverPort": 9000, "networkAvailable": false },
+      "normalized": {
+        "schemaVersion": 1,
+        "hfCacheDirectory": "",
+        "hfToken": null,
+        "serverPort": 9000,
+        "sleepIdleSeconds": null,
+        "agentMode": false,
+        "extraServerArgs": [],
+        "customWebUIDirectory": null,
+        "gpuWorkingSetMb": null,
+        "systemMemoryMb": null,
+        "networkAvailable": false
+      }
+    },
+    {
+      "name": "never-unload",
+      "input": { "sleepIdleSeconds": null, "agentMode": true },
+      "normalized": {
+        "schemaVersion": 1,
+        "hfCacheDirectory": "",
+        "hfToken": null,
+        "serverPort": 0,
+        "sleepIdleSeconds": null,
+        "agentMode": true,
+        "extraServerArgs": [],
+        "customWebUIDirectory": null,
+        "gpuWorkingSetMb": null,
+        "systemMemoryMb": null,
+        "networkAvailable": true
+      }
+    }
+  ],
+  "snapshotShape": [
+    "schemaVersion",
+    "hfCacheDirectory",
+    "hfToken",
+    "serverPort",
+    "sleepIdleSeconds",
+    "agentMode",
+    "extraServerArgs",
+    "customWebUIDirectory",
+    "gpuWorkingSetMb",
+    "systemMemoryMb",
+    "networkAvailable"
+  ]
+}

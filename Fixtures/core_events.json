@@ -1,0 +1,12 @@
+{
+  "events": [
+    { "kind": "serverState", "notification": "LBServerStateDidChange" },
+    { "kind": "modelDownloads", "notification": "LBModelDownloadsDidChange" },
+    { "kind": "modelDownloadedList", "notification": "LBModelDownloadedListDidChange" },
+    { "kind": "userSettings", "notification": "LBUserSettingsDidChange" },
+    { "kind": "modelDownloadFailed", "notification": "LBModelDownloadDidFail" },
+    { "kind": "modelDownloadCompleted", "notification": "LBModelDownloadDidComplete" },
+    { "kind": "modelStatus", "notification": "LBModelStatusDidChange" },
+    { "kind": "globalInputShortcut", "notification": "LBGlobalInputShortcutDidChange" }
+  ]
+}

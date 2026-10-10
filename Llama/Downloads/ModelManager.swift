@@ -123,6 +123,8 @@ class ModelManager: NSObject, URLSessionDataDelegate {
   private func handlePathUpdate(satisfied: Bool) {
     let wasAvailable = isNetworkAvailable
     isNetworkAvailable = satisfied
+    // Inject connectivity into the core so it can decide park/resume (Fase 7).
+    ConfigBridge.push()
     guard satisfied, !wasAvailable else { return }
 
     // downloadModel mutates pausedDownloads, so iterate a snapshot.

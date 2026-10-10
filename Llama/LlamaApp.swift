@@ -74,6 +74,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // regenerates models.ini below.
     UserModelOverrides.seedTemplateIfNeeded()
 
+    // Bring up the Rust core: push the environment snapshot (`ConfigBridge`) and
+    // subscribe to core events (`EventBridge`) before any service that uses them.
+    ConfigBridge.start()
+    EventBridge.start()
+
     // Enable visual debugging if LB_DEBUG_UI is set
     NSView.swizzleDebugBehavior()
 

@@ -61,5 +61,34 @@ enum LlamaCore {
     }
     return (try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])) as? T
   }
+
+  // MARK: - Config / lifecycle
+
+  /// Initializes the core with a `CoreConfig` snapshot (see `ConfigBridge`).
+  /// Returns the core's status code (0 on success).
+  @discardableResult
+  static func configure(_ config: [String: Any]) -> Int32 {
+    encode(config).withCString { llama_core_init($0) }
+  }
+
+  /// Replaces the core's `CoreConfig` snapshot on a settings change.
+  @discardableResult
+  static func setConfig(_ config: [String: Any]) -> Int32 {
+    encode(config).withCString { llama_core_set_config($0) }
+  }
+
+  /// Registers (or clears, with `nil`) the event callback. The callback fires on
+  /// whatever thread the core emits from — `EventBridge` marshals to the main
+  /// actor.
+  static func installEventCallback(
+    _ cb: (@convention(c) (UnsafePointer<CChar>?) -> Void)?
+  ) {
+    llama_core_set_event_cb(cb)
+  }
+
+  /// Returns the core's canonical `CoreConfig` snapshot (every key present).
+  static func snapshot() -> [String: Any]? {
+    callJSON("core.snapshot")
+  }
 }
 
