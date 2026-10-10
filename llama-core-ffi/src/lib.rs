@@ -355,7 +355,27 @@ fn resolved_to_value(r: &Resolved) -> Value {
 }
 
 fn resolve_error_to_value(e: &ResolveError) -> Value {
-    json!({ "error": e.kind(), "message": e.message() })
+    let (repo, quant, shard) = match e {
+        ResolveError::InvalidQuant(q) => (None, Some(q.as_str()), None),
+        ResolveError::RepoNotFound(r)
+        | ResolveError::Gated(r)
+        | ResolveError::NetworkUnavailable(r)
+        | ResolveError::NoGgufFiles(r)
+        | ResolveError::NoCompatibleFile(r) => (Some(r.as_str()), None, None),
+        ResolveError::QuantNotFound { repo, quant } => {
+            (Some(repo.as_str()), Some(quant.as_str()), None)
+        }
+        ResolveError::ShardMissing { repo, shard } => {
+            (Some(repo.as_str()), None, Some(shard.as_str()))
+        }
+    };
+    json!({
+        "error": e.kind(),
+        "message": e.message(),
+        "repo": repo,
+        "quant": quant,
+        "shard": shard,
+    })
 }
 
 fn suggestions_to_value(sa: &[catalog::Suggestion]) -> Value {

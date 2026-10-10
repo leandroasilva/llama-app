@@ -12,6 +12,10 @@ import os.log
 ///      candidates by `memBudget` so a small Mac doesn't get handed a
 ///      too-big Q4_K_M; final fallback is "largest" rather than llama.cpp's
 ///      "first listed" (alphabetical) which would systematically pick BF16.
+///
+/// The selection lives in the Rust core (`net.resolveFromSiblings`); this type
+/// does the transport (fetch the sibling list from the HF API) and maps the
+/// core's structured result/error back onto the Swift surface.
 enum HFRepoResolver {
 
   private static let logger = Logger(subsystem: Logging.subsystem, category: "HFRepoResolver")
@@ -92,54 +96,71 @@ enum HFRepoResolver {
   ) async throws -> Resolved {
     // Up-front validation: a malformed but present quant is a hard reject.
     // Otherwise a tampered link could silently install a different file by
-    // falling through to default-quant resolution.
+    // falling through to default-quant resolution. (The core re-checks; we do
+    // it here too so a bad quant never costs a network round-trip.)
     if let quant, GGUFQuant.parseLabel(quant) == nil {
       throw ResolveError.invalidQuant(quant)
     }
 
     let siblings = try await fetchSiblings(repo: repo, token: token)
-    guard !siblings.isEmpty else {
-      throw ResolveError.noGgufFiles(repo)
+
+    var args: [String: Any] = [
+      "repo": repo,
+      "budgetMb": Model.deviceMemoryBudgetMb,
+      "siblings": siblings.map { sib -> [String: Any] in
+        var d: [String: Any] = ["rfilename": sib.rfilename]
+        if let size = sib.size { d["size"] = size }
+        return d
+      },
+    ]
+    if let quant { args["requestedQuant"] = quant }
+
+    guard let out = LlamaCore.callJSON("net.resolveFromSiblings", args) else {
+      throw ResolveError.networkUnavailable(repo)
+    }
+    if out["error"] != nil {
+      throw resolveError(from: out)
     }
 
-    let budgetMb = Model.deviceMemoryBudgetMb
-
-    // File selection: pick the main GGUF (plus its canonical quant tag).
-    let pick = try selectMain(
-      repo: repo, requestedQuant: quant,
-      siblings: siblings, budgetMb: budgetMb
-    )
-
-    // Expand shards + attach mmproj + attach the quant-matched draft head.
-    let shards = try expandShards(main: pick.rfilename, siblings: siblings, repo: repo)
-    let mmproj = pickMmproj(main: pick.rfilename, siblings: siblings)
-    let draft = pickDraftHead(main: pick.rfilename, siblings: siblings, mainQuant: pick.tag)
-
-    // Aggregate size (main + shards + mmproj + draft), dropping unknown entries.
-    var allPicked: [String] = shards  // includes the main shard at index 0
-    if let m = mmproj { allPicked.append(m.rfilename) }
-    if let d = draft { allPicked.append(d.rfilename) }
-    let sizeByPath: [String: Int64] = Dictionary(
-      uniqueKeysWithValues: siblings.map { ($0.rfilename, $0.size ?? 0) })
-    let approxBytes = allPicked.reduce(Int64(0)) { $0 + (sizeByPath[$1] ?? 0) }
-
-    // Run the repo through the shared id grammar so native (ggml-org) models
-    // get the same short id here as in the post-install scan.
-    let modelId = Model.makeId(orgSlashRepo: repo, tag: pick.tag)
-
-    let mainUrl = resolveUrl(repo: repo, path: pick.rfilename)
-    let extraUrls = shards.dropFirst().map { resolveUrl(repo: repo, path: $0) }
-    let mmprojUrl = mmproj.map { resolveUrl(repo: repo, path: $0.rfilename) }
-    let draftUrl = draft.map { resolveUrl(repo: repo, path: $0.rfilename) }
+    guard let modelId = out["modelId"] as? String,
+      let mainUrl = (out["mainUrl"] as? String).flatMap(URL.init(string:))
+    else {
+      throw ResolveError.networkUnavailable(repo)
+    }
 
     return Resolved(
       modelId: modelId,
       mainUrl: mainUrl,
-      additionalParts: Array(extraUrls),
-      mmprojUrl: mmprojUrl,
-      draftUrl: draftUrl,
-      approximateBytes: approxBytes
+      additionalParts: (out["additionalParts"] as? [String] ?? []).compactMap(URL.init(string:)),
+      mmprojUrl: (out["mmprojUrl"] as? String).flatMap(URL.init(string:)),
+      draftUrl: (out["draftUrl"] as? String).flatMap(URL.init(string:)),
+      approximateBytes: (out["approximateBytes"] as? NSNumber)?.int64Value ?? 0
     )
+  }
+
+  /// Rebuilds the typed `ResolveError` from the core's structured error object
+  /// (`resolve_error_to_value`), so the UI keeps its original title/recovery.
+  private static func resolveError(from out: [String: Any]) -> ResolveError {
+    let kind = out["error"] as? String ?? ""
+    let repo = out["repo"] as? String ?? ""
+    switch kind {
+    case "invalidQuant":
+      return .invalidQuant(out["quant"] as? String ?? "")
+    case "repoNotFound":
+      return .repoNotFound(repo)
+    case "gated":
+      return .gated(repo)
+    case "noGgufFiles":
+      return .noGgufFiles(repo)
+    case "quantNotFound":
+      return .quantNotFound(repo: repo, quant: out["quant"] as? String ?? "")
+    case "shardMissing":
+      return .shardMissing(repo: repo, shard: out["shard"] as? String ?? "")
+    case "noCompatibleFile":
+      return .noCompatibleFile(repo: repo)
+    default:
+      return .networkUnavailable(repo)
+    }
   }
 
   // MARK: - HF API
@@ -195,222 +216,5 @@ enum HFRepoResolver {
       return []
     }
     return siblings
-  }
-
-  // MARK: - Selection
-
-  /// Outcome of the main-file pick.
-  private struct Pick {
-    let rfilename: String  // repo-relative path
-    let tag: String  // canonical quant tag (goes into the model id)
-  }
-
-  private static func selectMain(
-    repo: String, requestedQuant: String?,
-    siblings: [Sibling], budgetMb: Double
-  ) throws -> Pick {
-    // Main-weight candidates only, for both selection paths below:
-    // - `mtp-…`, `dflash-…` and `mmproj*` sidecars carry a quant label too, so
-    //   an explicit `quant=Q8_0`/`quant=F16` request could otherwise match a
-    //   sidecar instead of the main weights; imatrix files aren't runnable at
-    //   all.
-    // - Split-shard continuations (`-00002-of-00003.gguf`, …) parse to the same
-    //   quant label as their set, and picking a non-first shard as "main"
-    //   breaks the shard expansion downstream (it assumes main == first shard
-    //   when building `additionalParts`).
-    let allGgufs = siblings.filter { sib in
-      guard isGgufCandidate(sib.rfilename),
-        !SidecarPicker.isDraftHead(sib.rfilename),
-        !SidecarPicker.isMmproj(sib.rfilename)
-      else { return false }
-      let name = (sib.rfilename as NSString).lastPathComponent
-      if name.lowercased().contains("imatrix") { return false }
-      return !HFRepoParser.isSplitShard(name) || HFRepoParser.isFirstShard(name)
-    }
-    guard !allGgufs.isEmpty else { throw ResolveError.noGgufFiles(repo) }
-
-    // 1. Explicit quant: match any sibling whose parsed label == requested.
-    // Labels come from the HF grammar first, falling back to the legacy
-    // last-dash-segment parser for names outside HF's enum (e.g. ggml-org's
-    // bare `Q4_K`, which `parseLabel` can't read at all).
-    if let requested = requestedQuant {
-      func label(_ sib: Sibling) -> String? {
-        GGUFQuant.parseLabel(sib.rfilename)
-          ?? HFRepoParser.parseQuant(
-            filename: (sib.rfilename as NSString).lastPathComponent)
-      }
-      var matches = allGgufs.filter { sib in
-        guard let label = label(sib) else { return false }
-        return GGUFQuant.matches(label, requested)
-      }
-      // Second pass: compare canonical tags, so a plain `quant=Q4_K_M` request
-      // still finds a repo that only ships a prefixed variant (`UD-Q4_K_M`).
-      // Exact label matches take priority so a repo carrying both the plain
-      // and the prefixed file resolves to the one literally asked for.
-      if matches.isEmpty {
-        let requestedTag = GGUFQuant.canonicalTag(requested)
-        matches = allGgufs.filter { sib in
-          guard let label = label(sib) else { return false }
-          return GGUFQuant.matches(GGUFQuant.canonicalTag(label), requestedTag)
-        }
-      }
-      guard let picked = largest(matches, siblings: siblings, repo: repo) else {
-        throw ResolveError.quantNotFound(repo: repo, quant: requested)
-      }
-      if matches.count > 1 {
-        logger.info(
-          "Ambiguous quant \(requested) in \(repo): \(matches.count) matches; picked largest")
-      }
-      // Tag via the shared derivation (file-derived label first, `requested`
-      // only as last resort) — the same chain the post-download sideloaded
-      // scan uses, so the resulting `{org}/{repo}:{TAG}` id round-trips
-      // exactly (and matches how llama-server names the model at runtime).
-      return Pick(
-        rfilename: picked.rfilename,
-        tag: GGUFQuant.tag(forPath: picked.rfilename, requested: requested))
-    }
-
-    // 2. No quant: mirror llama.cpp's `find_best_model`
-    // (`common/download.cpp:623`) — try Q4_K_M tag, then Q4_0 tag, else fall
-    // back to the largest fits-budget candidate. For sharded quants,
-    // compatibility uses the sum of all shard sizes when HF provided per-shard
-    // sizes; otherwise we fall back to the first shard's size.
-    let compatible = allGgufs.filter {
-      Model.estimatedWeightFits(
-        bytes: estimatedModelBytes(for: $0, siblings: siblings, repo: repo), budgetMb: budgetMb)
-    }
-
-    // Tag preference: try each in order, take the first matching candidate.
-    // The boundary `[.-]` mirrors llama.cpp's regex exactly, so e.g.
-    // `UD-Q4_K_XL.gguf` doesn't get treated as Q4_K_M.
-    let preferred: Sibling? = ["Q4_K_M", "Q4_0"].lazy.compactMap { tag in
-      compatible.first { sib in
-        sib.rfilename.range(
-          of: "\(tag)[.-]",
-          options: [.regularExpression, .caseInsensitive]) != nil
-      }
-    }.first
-
-    // Fallback: largest fits-budget candidate. We deviate from llama.cpp's
-    // "first listed" (alphabetical) here — alphabetical fallback systematically
-    // picks BF16/F16 over smaller quants in repos that have them, which is
-    // exactly the surprise we're trying to avoid.
-    guard let best = preferred ?? largest(compatible, siblings: siblings, repo: repo) else {
-      throw ResolveError.noCompatibleFile(repo: repo)
-    }
-    return Pick(
-      rfilename: best.rfilename,
-      tag: GGUFQuant.tag(forPath: best.rfilename))
-  }
-
-  /// Picks the largest sibling from a list, ranking sharded variants by the
-  /// sum of all shard sizes when available. Ties broken by rfilename for
-  /// determinism. Returns nil for empty input.
-  private static func largest(
-    _ sibs: [Sibling], siblings: [Sibling], repo: String
-  ) -> Sibling? {
-    sibs.max { a, b in
-      let aBytes = estimatedModelBytes(for: a, siblings: siblings, repo: repo) ?? 0
-      let bBytes = estimatedModelBytes(for: b, siblings: siblings, repo: repo) ?? 0
-      if aBytes != bBytes { return aBytes < bBytes }
-      return a.rfilename < b.rfilename
-    }
-  }
-
-  /// Estimated bytes for a runnable quant. If `main` is the first shard of a
-  /// split model and all sibling sizes are known, returns the total across all
-  /// shards; otherwise falls back to the main file's size.
-  private static func estimatedModelBytes(
-    for main: Sibling, siblings: [Sibling], repo: String
-  ) -> Int64? {
-    guard let shardPaths = try? expandShards(main: main.rfilename, siblings: siblings, repo: repo)
-    else { return main.size }
-    guard shardPaths.count > 1 else { return main.size }
-
-    let sizeByPath = Dictionary(
-      uniqueKeysWithValues: siblings.compactMap { sibling in
-        sibling.size.map { (sibling.rfilename, $0) }
-      })
-
-    var total: Int64 = 0
-    for path in shardPaths {
-      guard let size = sizeByPath[path] else { return main.size }
-      total += size
-    }
-    return total
-  }
-
-  // MARK: - Shard + mmproj expansion
-
-  /// Returns the ordered list of shard filenames (including the main file) if
-  /// `main` is part of a sharded set, else just `[main]`. Throws if any shard
-  /// in the `1..M` range is missing.
-  private static func expandShards(
-    main: String, siblings: [Sibling], repo: String
-  ) throws -> [String] {
-    // Parse the `-<N>-of-<M>.gguf` tail. Both shard indices are 5-digit zero-
-    // padded, same as llama.cpp's sharder.
-    let basename = (main as NSString).lastPathComponent
-    guard let total = HFRepoParser.shardTotal(basename),
-      let stemBeforeShard = HFRepoParser.splitShardBaseName(basename)
-    else { return [main] }
-
-    // `main` may be nested in a subdir — preserve the prefix when reconstructing siblings.
-    let prefix: String = {
-      if let slash = main.lastIndex(of: "/") {
-        return String(main[..<main.index(after: slash)])
-      }
-      return ""
-    }()
-
-    // Rebuild each shard name from the stem with a varying index.
-    let siblingSet = Set(siblings.map(\.rfilename))
-    var shards: [String] = []
-    for i in 1...total {
-      let idx = String(format: "%05d", i)
-      let tot = String(format: "%05d", total)
-      let shard = "\(stemBeforeShard)-\(idx)-of-\(tot).gguf"
-      let full = prefix + shard
-      guard siblingSet.contains(full) else {
-        throw ResolveError.shardMissing(repo: repo, shard: shard)
-      }
-      shards.append(full)
-    }
-    return shards
-  }
-
-  /// Picks the mmproj sidecar among the repo's siblings. Selection policy lives
-  /// in `SidecarPicker.mmproj`, shared with the cache scan.
-  private static func pickMmproj(main: String, siblings: [Sibling]) -> Sibling? {
-    let names = siblings.map(\.rfilename)
-    guard let picked = SidecarPicker.mmproj(among: names, mainPath: main) else { return nil }
-    return siblings.first { $0.rfilename == picked }
-  }
-
-  /// Picks the draft-head sidecar for the chosen main quant. Selection policy
-  /// lives in `SidecarPicker.draftHead`, shared with the cache scan.
-  private static func pickDraftHead(main: String, siblings: [Sibling], mainQuant: String)
-    -> Sibling?
-  {
-    let names = siblings.map(\.rfilename)
-    guard let picked = SidecarPicker.draftHead(among: names, mainPath: main, tag: mainQuant)
-    else { return nil }
-    return siblings.first { $0.rfilename == picked }
-  }
-
-  // MARK: - Helpers
-
-  private static func isGgufCandidate(_ path: String) -> Bool {
-    path.lowercased().hasSuffix(".gguf")
-  }
-
-  private static func resolveUrl(repo: String, path: String) -> URL {
-    // Encode each path segment separately so `/` stays a delimiter.
-    let encodedPath =
-      path
-      .split(separator: "/", omittingEmptySubsequences: false)
-      .map { $0.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? String($0) }
-      .joined(separator: "/")
-    return URL(string: "https://huggingface.co/\(repo)/resolve/main/\(encodedPath)")!
   }
 }
