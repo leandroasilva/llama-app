@@ -13,18 +13,16 @@ import os.log
 ///
 /// This only ever writes the managed path. A Homebrew (or other unmanaged)
 /// install is never touched -- see `LlamaBinaries`.
+///
+/// The Metal-config mapping, artifact URLs, decompression, atomic install and
+/// PATH symlink all live in the Rust core (`engine.metalConfig`,
+/// `engine.artifactUrl`, `engine.unzstdUrl`, `engine.decompress`,
+/// `engine.atomicInstall`, `engine.ensurePathSymlink`, `engine.promoteStaged`).
+/// This type keeps the async-download orchestration (`install`) and the
+/// `URLSession` download, which the core has no async transport for.
 enum LlamaInstaller {
 
   private static let logger = Logger(subsystem: Logging.subsystem, category: "LlamaInstaller")
-
-  /// Root of the prebuilt-binary bucket. `…/resolve/latest` returns the current
-  /// version tag (e.g. `b9553`); `…/resolve/<ver>/<arch>/<os>/…` are artifacts.
-  private static let bucketBase =
-    "https://huggingface.co/buckets/ggml-org/install.sh/resolve"
-
-  /// We only ship prebuilt Apple Silicon (Metal) macOS binaries.
-  private static let arch = "aarch64"
-  private static let os = "macos"
 
   /// The real binary path (also what `LlamaBinaries` resolves as `.managed`).
   private static var llamaPath: String { LlamaBinaries.managedPath }
@@ -40,16 +38,9 @@ enum LlamaInstaller {
   /// the next app launch, before the server starts.
   static var stagedPath: String { LlamaBinaries.managedPath + ".staged" }
 
-  /// The on-PATH symlink `install.sh` creates so `llama` works in a terminal.
-  private static var symlinkDir: String {
-    (NSHomeDirectory() as NSString).appendingPathComponent(".local/bin")
-  }
-  private static var symlinkPath: String { symlinkDir + "/llama" }
-
   enum InstallError: Error, LocalizedError {
     case unsupportedHardware(String)
     case downloadFailed(String)
-    case decompressFailed(String)
     case installFailed(String)
 
     var errorDescription: String? {
@@ -58,12 +49,19 @@ enum LlamaInstaller {
         return "No prebuilt llama binary for this Mac (\(detail))."
       case .downloadFailed(let detail):
         return "Download failed: \(detail)"
-      case .decompressFailed(let detail):
-        return "Couldn't unpack the llama binary: \(detail)"
       case .installFailed(let detail):
         return "Couldn't install the llama binary: \(detail)"
       }
     }
+  }
+
+  /// A failure the core already formatted: its `message()` text matches the
+  /// previous Swift `InstallError.errorDescription`, so it's surfaced verbatim
+  /// rather than re-wrapped.
+  struct InstallFailure: Error, LocalizedError {
+    let kind: String
+    let message: String
+    var errorDescription: String? { message }
   }
 
   // MARK: - Public API
@@ -79,8 +77,9 @@ enum LlamaInstaller {
     let config = try metalConfig()
     try await ensureUnzstd(version: version)
 
-    let zstURL = try await download(
-      "\(bucketBase)/\(version)/\(arch)/\(os)/metal/\(config)/llama-app.zst")
+    let artifactUrl: String =
+      LlamaCore.callValue("engine.artifactUrl", "url", ["version": version, "config": config]) ?? ""
+    let zstURL = try await download(artifactUrl)
     defer { try? FileManager.default.removeItem(at: zstURL) }
 
     let dest = staged ? stagedPath : llamaPath
@@ -95,29 +94,30 @@ enum LlamaInstaller {
   /// the server starts. Runs a `version` subprocess, so call off the main
   /// thread.
   static func promoteStaged(target: LlamaVersion) {
-    let fm = FileManager.default
-    guard fm.isExecutableFile(atPath: stagedPath) else { return }
-
-    guard LlamaBinaries.readVersion(at: stagedPath) == target else {
+    let out = LlamaCore.callJSON("engine.promoteStaged", [
+      "staged": stagedPath, "live": llamaPath, "targetBuild": target.build,
+      "home": NSHomeDirectory(),
+    ])
+    switch out?["outcome"] as? String {
+    case "discardedStale":
       logger.info("Discarding stale staged llama binary")
-      try? fm.removeItem(atPath: stagedPath)
-      return
+    case "failed":
+      logger.error(
+        "Couldn't promote staged llama binary: \(out?["message"] as? String ?? "", privacy: .public)"
+      )
+    case "promoted":
+      logger.info("Promoted staged llama binary \(target.tag, privacy: .public)")
+    default:
+      break  // nothingStaged
     }
-
-    guard rename(stagedPath, llamaPath) == 0 else {
-      logger.error("Couldn't promote staged llama binary: \(String(cString: strerror(errno)))")
-      try? fm.removeItem(atPath: stagedPath)
-      return
-    }
-    linkOnPath()
-    logger.info("Promoted staged llama binary \(target.tag, privacy: .public)")
   }
 
   // MARK: - Steps
 
   /// Maps this Mac's CPU to a Metal bucket config (`m1`…`m5`, `a18`), mirroring
   /// `install.sh`, which buckets every M-series variant (Pro/Max/Ultra) by
-  /// generation number and also accepts the A18 (non-M MacBook).
+  /// generation number and also accepts the A18 (non-M MacBook). The sysctl read
+  /// stays here; the brand→config mapping lives in the core.
   private static func metalConfig() throws -> String {
     var size = 0
     sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0)
@@ -126,96 +126,58 @@ enum LlamaInstaller {
     sysctlbyname("machdep.cpu.brand_string", &buf, &size, nil, 0)
     let brand = String(cString: buf)
 
-    guard let range = brand.range(of: "Apple (M[1-5]|A18)", options: .regularExpression)
+    guard let config: String = LlamaCore.callValue("engine.metalConfig", "config", ["brand": brand])
     else {
       throw InstallError.unsupportedHardware(brand)
     }
-    return brand[range].dropFirst("Apple ".count).lowercased()
+    return config
   }
 
   /// Ensures the `unzstd` helper is present, fetching it once and caching it
   /// next to the binary. Subsequent installs/updates reuse it.
   private static func ensureUnzstd(version: String) async throws {
     if FileManager.default.isExecutableFile(atPath: unzstdPath) { return }
-    let tmp = try await download("\(bucketBase)/\(version)/\(arch)/\(os)/unzstd")
+    let url: String = LlamaCore.callValue("engine.unzstdUrl", "url", ["version": version]) ?? ""
+    let tmp = try await download(url)
     defer { try? FileManager.default.removeItem(at: tmp) }
     try atomicInstall(from: tmp, to: unzstdPath)
   }
 
   /// Decompresses `zst` through the `unzstd` helper and atomically swaps the
-  /// result into `dest`. The temp output lives in `installDir` so the final
+  /// result into `dest`. The temp output lives in the install dir so the final
   /// `rename(2)` is a same-volume atomic replace -- a crash never leaves a
-  /// half-written binary in place.
+  /// half-written binary in place. Runs in the core (`engine.decompress`).
   private static func decompress(zst: URL, to dest: String) throws {
-    let fm = FileManager.default
-    try fm.createDirectory(atPath: installDir, withIntermediateDirectories: true)
-
-    let tmpOut = installDir + "/llama.tmp-\(UUID().uuidString)"
-    guard fm.createFile(atPath: tmpOut, contents: nil) else {
-      throw InstallError.decompressFailed("couldn't create \(tmpOut)")
-    }
-
-    do {
-      guard let outHandle = FileHandle(forWritingAtPath: tmpOut) else {
-        throw InstallError.decompressFailed("couldn't open \(tmpOut)")
-      }
-      let inHandle = try FileHandle(forReadingFrom: zst)
-      let errPipe = Pipe()
-
-      // unzstd with no args decompresses stdin -> stdout.
-      let proc = Process()
-      proc.executableURL = URL(fileURLWithPath: unzstdPath)
-      proc.standardInput = inHandle
-      proc.standardOutput = outHandle
-      proc.standardError = errPipe
-
-      try proc.run()
-      proc.waitUntilExit()
-      try? inHandle.close()
-      try? outHandle.close()
-
-      guard proc.terminationStatus == 0 else {
-        let err = String(
-          decoding: errPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        throw InstallError.decompressFailed(
-          "unzstd exited \(proc.terminationStatus): \(err.prefix(200))")
-      }
-
-      try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tmpOut)
-      guard rename(tmpOut, dest) == 0 else {
-        throw InstallError.installFailed("rename: \(String(cString: strerror(errno)))")
-      }
-    } catch {
-      try? fm.removeItem(atPath: tmpOut)
-      throw error
-    }
+    let out = LlamaCore.callJSON("engine.decompress", [
+      "unzstd": unzstdPath, "zst": zst.path, "dest": dest,
+    ])
+    try checkInstallResult(out)
   }
 
   /// Mirrors `install.sh`'s `ln -sf`: point `~/.local/bin/llama` at our
   /// binary so it's available in a terminal. Best-effort -- the app resolves the
-  /// real path directly, so a failure here doesn't break the app. We won't
-  /// clobber a real file a user may have placed there; only absent or symlink
-  /// entries are (re)written.
+  /// real path directly, so a failure here doesn't break the app. The core
+  /// (`engine.ensurePathSymlink`) won't clobber a real file a user may have
+  /// placed there; only absent or symlink entries are (re)written.
   private static func linkOnPath() {
-    let fm = FileManager.default
-    do {
-      try fm.createDirectory(atPath: symlinkDir, withIntermediateDirectories: true)
-
-      if (try? fm.destinationOfSymbolicLink(atPath: symlinkPath)) != nil {
-        try fm.removeItem(atPath: symlinkPath)  // replace our (or any) existing symlink
-      } else if fm.fileExists(atPath: symlinkPath) {
-        logger.info("Leaving existing non-symlink at \(symlinkPath, privacy: .public)")
-        return
-      }
-      try fm.createSymbolicLink(atPath: symlinkPath, withDestinationPath: llamaPath)
-    } catch {
-      logger.error("Couldn't create PATH symlink: \(error.localizedDescription, privacy: .public)")
+    let out = LlamaCore.callJSON("engine.ensurePathSymlink", [
+      "home": NSHomeDirectory(), "llamaPath": llamaPath,
+    ])
+    switch out?["outcome"] as? String {
+    case "leftExisting":
+      logger.info("Leaving existing non-symlink at ~/.local/bin/llama")
+    case "failed":
+      logger.error(
+        "Couldn't create PATH symlink: \(out?["message"] as? String ?? "", privacy: .public)")
+    default:
+      break
     }
   }
 
   // MARK: - Helpers
 
-  /// Downloads a URL to a temp file, following HF's redirect to the CDN.
+  /// Downloads a URL to a temp file, following HF's redirect to the CDN. Kept in
+  /// Swift for `URLSession`'s async download (the core has no async transport).
   private static func download(_ urlString: String) async throws -> URL {
     guard let url = URL(string: urlString) else {
       throw InstallError.downloadFailed("bad URL: \(urlString)")
@@ -230,22 +192,17 @@ enum LlamaInstaller {
   }
 
   /// Copies `src` (possibly on another volume) onto the destination volume, then
-  /// atomically renames it into place as an executable.
+  /// atomically renames it into place as an executable. Runs in the core
+  /// (`engine.atomicInstall`).
   private static func atomicInstall(from src: URL, to dest: String) throws {
-    let fm = FileManager.default
-    try fm.createDirectory(
-      atPath: (dest as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+    let out = LlamaCore.callJSON("engine.atomicInstall", ["src": src.path, "dest": dest])
+    try checkInstallResult(out)
+  }
 
-    let tmp = dest + ".tmp-\(UUID().uuidString)"
-    do {
-      try fm.copyItem(at: src, to: URL(fileURLWithPath: tmp))
-      try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tmp)
-      guard rename(tmp, dest) == 0 else {
-        throw InstallError.installFailed("rename \(dest): \(String(cString: strerror(errno)))")
-      }
-    } catch {
-      try? fm.removeItem(atPath: tmp)
-      throw error
-    }
+  /// Throws an `InstallFailure` if a core install-result object carries an
+  /// `error`; no-op on `{"ok":true}` or a missing response.
+  private static func checkInstallResult(_ out: [String: Any]?) throws {
+    guard let error = out?["error"] as? String else { return }
+    throw InstallFailure(kind: error, message: out?["message"] as? String ?? error)
   }
 }
