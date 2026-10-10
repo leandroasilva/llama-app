@@ -73,4 +73,49 @@ final class CoreBridgeTests: XCTestCase {
     XCTAssertEqual(response, #"{"known":true,"ok":true}"#)
     wait(for: [posted], timeout: 2)
   }
+
+  /// `models.scan` (Rust) owns discovery, the mem-profile fold, and the partial
+  /// GC. It mutates the cache (cleans installed partial dirs), so scan a copy of
+  /// the read-only fixture tree, seeded with one cached profile.
+  func testModelsScanMatchesFixture() throws {
+    let fixture = try load("model_scan.json")
+    let cacheRel = try XCTUnwrap(fixture["cacheDir"] as? String)
+    let seeded = try XCTUnwrap(fixture["seededProfile"] as? [String: Any])
+    let seededId = try XCTUnwrap(seeded["modelId"] as? String)
+    let seededCtx = try XCTUnwrap((seeded["ctxBytesPer1kTokens"] as? NSNumber)?.intValue)
+    let seededResident = try XCTUnwrap((seeded["residentBytes"] as? NSNumber)?.intValue)
+    let expectedIds = Set(try XCTUnwrap(fixture["expectedModelIds"] as? [String]))
+
+    let tmp = FileManager.default.temporaryDirectory
+      .appendingPathComponent("llama-scan-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tmp) }
+
+    let cache = tmp.appendingPathComponent("cache")
+    try FileManager.default.copyItem(
+      at: Fixtures.directory.appendingPathComponent(cacheRel), to: cache)
+    let mem = tmp.appendingPathComponent("mem")
+    try FileManager.default.createDirectory(at: mem, withIntermediateDirectories: true)
+
+    _ = LlamaCore.callJSON(
+      "engine.memCacheSet",
+      [
+        "cacheDir": mem.path, "modelId": seededId,
+        "ctxBytesPer1kTokens": seededCtx, "residentBytes": seededResident,
+      ])
+
+    let out = try XCTUnwrap(
+      LlamaCore.callJSON("models.scan", ["cacheDir": cache.path, "memCacheDir": mem.path]))
+    let models = try XCTUnwrap(out["models"] as? [[String: Any]])
+    XCTAssertEqual(Set(models.compactMap { $0["id"] as? String }), expectedIds)
+
+    let seededRow = try XCTUnwrap(models.first { ($0["id"] as? String) == seededId })
+    XCTAssertEqual((seededRow["ctxBytesPer1kTokens"] as? NSNumber)?.intValue, seededCtx)
+    XCTAssertEqual((seededRow["residentBytes"] as? NSNumber)?.intValue, seededResident)
+
+    let needs = Set(
+      (out["needsProfile"] as? [[Any]])?.compactMap { $0.first as? String } ?? [])
+    XCTAssertEqual(needs.count, models.count - 1)
+    XCTAssertFalse(needs.contains(seededId))
+  }
 }

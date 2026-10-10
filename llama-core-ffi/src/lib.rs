@@ -555,6 +555,30 @@ fn dispatch(method: &str, args: &Value) -> Value {
                 .collect();
             json!({ "entries": entries })
         }
+        "models.scan" => {
+            let scan = llama_core::models::scan::scan(arg_str("cacheDir"), arg_str("memCacheDir"));
+            let models: Vec<Value> = scan
+                .models
+                .iter()
+                .map(|m| {
+                    let mut v = sideloaded_entry_to_value(&m.entry);
+                    if let Some(obj) = v.as_object_mut() {
+                        obj.insert(
+                            "ctxBytesPer1kTokens".to_string(),
+                            json!(m.ctx_bytes_per_1k_tokens),
+                        );
+                        obj.insert("residentBytes".to_string(), json!(m.resident_bytes));
+                    }
+                    v
+                })
+                .collect();
+            let needs_profile: Vec<Value> = scan
+                .needs_profile
+                .iter()
+                .map(|(id, path)| json!([id, path]))
+                .collect();
+            json!({ "models": models, "needsProfile": needs_profile })
+        }
 
         // ---- Fase 1: DraftHead ----
         "draftHead.fromSidecarPath" => {

@@ -558,28 +558,46 @@ class ModelManager: NSObject, URLSessionDataDelegate {
 
   /// The scan itself: pure disk work, no state touched, so it can run on the
   /// main actor at launch or off it for every later refresh.
+  ///
+  /// Discovery, the mem-profile fold, and the partial-dir garbage collection
+  /// live in the core (`models.scan`); only paused-placeholder rehydration
+  /// stays here, since it needs Swift's `Codable` `Model`.
   nonisolated private static func scan(cacheDir hfCacheDir: URL) -> ScanResult {
-    let discovered = HFCache.scanForSideloaded(cacheDir: hfCacheDir)
+    let out = LlamaCore.callJSON("models.scan", [
+      "cacheDir": hfCacheDir.path,
+      "memCacheDir": MemProfileCache.cacheDir.path,
+    ])
 
-    // Apply cached mem-profile when available; queue the rest for async probing.
     var resolvedPaths: [String: ResolvedPaths] = [:]
     var models: [Model] = []
     var needsProfile: [(id: String, path: String)] = []
-    for (entry, paths) in discovered {
-      var entry = entry
-      if let cached = MemProfileCache.get(modelId: entry.id) {
-        entry.ctxBytesPer1kTokens = cached.ctxBytesPer1kTokens
-        entry.residentBytes = cached.residentBytes
-      } else {
-        needsProfile.append((id: entry.id, path: paths.modelFile))
-      }
-      resolvedPaths[entry.id] = paths
+
+    for e in out?["models"] as? [[String: Any]] ?? [] {
+      guard let id = e["id"] as? String,
+        let ctxWindow = (e["ctxWindow"] as? NSNumber)?.intValue,
+        let pathsDict = e["paths"] as? [String: Any],
+        let paths = ResolvedPaths(ffi: pathsDict)
+      else { continue }
+
+      let entry = Model(
+        id: id,
+        ctxWindow: ctxWindow,
+        fileSize: (e["fileSize"] as? NSNumber)?.int64Value ?? 0,
+        ctxBytesPer1kTokens: (e["ctxBytesPer1kTokens"] as? NSNumber)?.intValue ?? 0,
+        residentBytes: (e["residentBytes"] as? NSNumber)?.intValue ?? 0,
+        downloadUrl: URL(string: "file:///")!,
+        scannedDraftHead: (e["draftHead"] as? String).flatMap(DraftHead.init(rawValue:)),
+        isDecisionModel: e["isDecisionModel"] as? Bool ?? false
+      )
+      resolvedPaths[id] = paths
       models.append(entry)
     }
 
-    // Garbage-collect partial dirs whose target is now installed.
-    let installedIds = Set(models.map(\.id))
-    HFCache.cleanInstalledPartials(cacheDir: hfCacheDir, installedIds: installedIds)
+    for pair in out?["needsProfile"] as? [[Any]] ?? [] {
+      guard pair.count == 2, let id = pair[0] as? String, let path = pair[1] as? String
+      else { continue }
+      needsProfile.append((id: id, path: path))
+    }
 
     // Rehydrate paused rows for downloads interrupted in a previous session:
     // decode each on-disk placeholder back into a `Model` and pair it with its

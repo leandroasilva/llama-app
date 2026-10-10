@@ -314,17 +314,7 @@ enum HFCache {
 
   /// Rebuilds a `ResolvedPaths` from a `resolvedPathsToValue` object.
   private static func resolvedPaths(from d: [String: Any]) -> ResolvedPaths? {
-    guard let modelFile = d["modelFile"] as? String,
-      let hfRepoDirName = d["hfRepoDirName"] as? String
-    else { return nil }
-    return ResolvedPaths(
-      modelFile: modelFile,
-      additionalParts: d["additionalParts"] as? [String] ?? [],
-      mmprojFile: d["mmprojFile"] as? String,
-      usesMTP: d["usesMTP"] as? Bool ?? false,
-      draftSidecarFile: d["draftSidecarFile"] as? String,
-      hfRepoDirName: hfRepoDirName
-    )
+    ResolvedPaths(ffi: d)
   }
 }
 

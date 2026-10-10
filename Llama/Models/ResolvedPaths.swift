@@ -42,6 +42,22 @@ struct ResolvedPaths {
     self.hfRepoDirName = hfRepoDirName
   }
 
+  /// Decodes the `paths` object emitted by the Rust side (see
+  /// `resolved_paths_to_value`). Returns nil when the required keys are missing.
+  init?(ffi d: [String: Any]) {
+    guard let modelFile = d["modelFile"] as? String,
+      let hfRepoDirName = d["hfRepoDirName"] as? String
+    else { return nil }
+    self.init(
+      modelFile: modelFile,
+      additionalParts: d["additionalParts"] as? [String] ?? [],
+      mmprojFile: d["mmprojFile"] as? String,
+      usesMTP: d["usesMTP"] as? Bool ?? false,
+      draftSidecarFile: d["draftSidecarFile"] as? String,
+      hfRepoDirName: hfRepoDirName
+    )
+  }
+
   /// The kind of `draftSidecarFile`, read from its filename prefix.
   var draftSidecarKind: DraftHead? {
     var args: [String: Any] = [:]

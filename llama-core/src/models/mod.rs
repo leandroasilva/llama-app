@@ -4,6 +4,7 @@ pub mod draft_head;
 pub mod model;
 pub mod model_id_parser;
 pub mod resolved_paths;
+pub mod scan;
 
 pub use compat::{CompatibilityInfo, ModelMem};
 pub use context_tier::ContextTier;

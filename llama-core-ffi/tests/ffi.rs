@@ -340,6 +340,97 @@ fn fase2_hf_cache() {
 }
 
 #[test]
+fn fase7_models_scan() {
+    // `models.scan` cleans installed partial dirs, so scan a copy of the
+    // read-only fixture tree.
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let tmp = std::env::temp_dir().join(format!("llama-ffi-scan-{}-{nanos}", std::process::id()));
+    let cache = tmp.join("cache");
+    copy_tree(
+        std::path::Path::new(&fixture_path("hf_cache/cache")),
+        &cache,
+    );
+    let mem = tmp.join("mem");
+    std::fs::create_dir_all(&mem).unwrap();
+
+    // Seed one model's profile through the FFI, then scan.
+    let seed = serde_json::json!({
+        "cacheDir": mem.to_str().unwrap(),
+        "modelId": "unsloth/Tiny-GGUF:Q4_K_M",
+        "ctxBytesPer1kTokens": 4096,
+        "residentBytes": 2048,
+    })
+    .to_string();
+    assert!(call("engine.memCacheSet", &seed)
+        .unwrap()
+        .starts_with(r#"{"ok"#));
+
+    let args = serde_json::json!({
+        "cacheDir": cache.to_str().unwrap(),
+        "memCacheDir": mem.to_str().unwrap(),
+    })
+    .to_string();
+    let v: serde_json::Value = serde_json::from_str(&call("models.scan", &args).unwrap()).unwrap();
+
+    let models = v["models"].as_array().unwrap();
+    let mut ids: Vec<&str> = models.iter().map(|m| m["id"].as_str().unwrap()).collect();
+    ids.sort();
+    assert_eq!(
+        ids,
+        vec![
+            "org/Decision-GGUF:Q4_K_M",
+            "org/Embedded-GGUF:Q4_K_M",
+            "unsloth/MTP-GGUF:Q8_0",
+            "unsloth/Sharded-GGUF:Q4_K_M",
+            "unsloth/Tiny-GGUF:Q4_K_M",
+        ]
+    );
+
+    let seeded = models
+        .iter()
+        .find(|m| m["id"] == "unsloth/Tiny-GGUF:Q4_K_M")
+        .unwrap();
+    assert_eq!(seeded["ctxBytesPer1kTokens"], serde_json::json!(4096));
+    assert_eq!(seeded["residentBytes"], serde_json::json!(2048));
+
+    let needs: Vec<&str> = v["needsProfile"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p[0].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        needs.len(),
+        4,
+        "every model except the seeded one wants a probe"
+    );
+    assert!(!needs.contains(&"unsloth/Tiny-GGUF:Q4_K_M"));
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// Recursively copies `src` into `dst`, mirroring symlinks as symlinks.
+fn copy_tree(src: &std::path::Path, dst: &std::path::Path) {
+    std::fs::create_dir_all(dst).unwrap();
+    for entry in std::fs::read_dir(src).unwrap().flatten() {
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        let ty = entry.file_type().unwrap();
+        if ty.is_symlink() {
+            let target = std::fs::read_link(&from).unwrap();
+            std::os::unix::fs::symlink(target, &to).unwrap();
+        } else if ty.is_dir() {
+            copy_tree(&from, &to);
+        } else {
+            std::fs::copy(&from, &to).unwrap();
+        }
+    }
+}
+
+#[test]
 fn fase2_hf_cache_write_blob_and_link() {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

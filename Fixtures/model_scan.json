@@ -1,0 +1,15 @@
+{
+  "cacheDir": "hf_cache/cache",
+  "seededProfile": {
+    "modelId": "unsloth/Tiny-GGUF:Q4_K_M",
+    "ctxBytesPer1kTokens": 4096,
+    "residentBytes": 2048
+  },
+  "expectedModelIds": [
+    "org/Decision-GGUF:Q4_K_M",
+    "org/Embedded-GGUF:Q4_K_M",
+    "unsloth/MTP-GGUF:Q8_0",
+    "unsloth/Sharded-GGUF:Q4_K_M",
+    "unsloth/Tiny-GGUF:Q4_K_M"
+  ]
+}
