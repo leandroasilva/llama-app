@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import os.log
 
@@ -38,6 +37,10 @@ struct MemProfile: Codable {
 
 /// Probes a model with `llama fit-params` to derive a `MemProfile`.
 /// Run once per installed model; the result is cached on disk.
+///
+/// The subprocess plumbing lives here (Swift owns `Process` and cancellation);
+/// the affine fit and the `-fitp` output parse live in the Rust core
+/// (`engine.fit` / `engine.parseFitp`).
 enum MemProfileRunner {
 
   private static let logger = Logger(subsystem: Logging.subsystem, category: "MemProfileRunner")
@@ -70,32 +73,22 @@ enum MemProfileRunner {
     guard let hiMib = await probeTotalMib(llama: llamaPath, modelPath: modelPath, ctx: ctxHi)
     else { return nil }
 
-    // Affine fit: solve a + b·ctx_lo = lo, a + b·ctx_hi = hi.
-    let dc = Double(ctxHi - ctxLo)
-    let bPerToken = Double(hiMib - loMib) / dc  // MiB per token
-    let aMib = Double(loMib) - bPerToken * Double(ctxLo)  // MiB at ctx=0
-
-    // A negative slope means total memory went down as ctx grew — that's not
-    // a real outcome, it signals a broken probe. Failing here routes the
-    // caller to the file-size fallback, instead of silently producing a
-    // "memory is ctx-independent" estimate that would accept any ctx and
-    // risk OOM at runtime.
-    guard bPerToken >= 0 else {
+    // Affine fit in the core: solves a + b·ctx_lo = lo, a + b·ctx_hi = hi, and
+    // rejects a non-monotonic total (negative slope) as a broken probe, which
+    // routes the caller to the file-size fallback instead of a bogus
+    // "memory is ctx-independent" estimate that could OOM at runtime.
+    guard
+      let out = LlamaCore.callJSON("engine.fit", [
+        "loMib": Int(loMib), "hiMib": Int(hiMib), "ctxLo": Int(ctxLo), "ctxHi": Int(ctxHi),
+      ]),
+      let profile = out["profile"] as? [String: Any],
+      let bBytesPer1k = (profile["ctxBytesPer1kTokens"] as? NSNumber)?.intValue,
+      let aBytes = (profile["residentBytes"] as? NSNumber)?.intValue
+    else {
       logger.error(
-        "Fit params: non-monotonic total (\(loMib) MiB at \(ctxLo) vs \(hiMib) MiB at \(ctxHi))"
-      )
+        "Fit params: non-monotonic total (\(loMib) MiB at \(ctxLo) vs \(hiMib) MiB at \(ctxHi))")
       return nil
     }
-
-    // Clamp the intercept only — small negatives can appear from MiB rounding
-    // at the probe points, or from a compute-buffer step that only shows up
-    // at the high ctx. Overestimating the intercept is the safe direction.
-    let aBytes = Int(max(aMib, 0) * 1_048_576.0)
-    // Floor the slope at 1 byte/1k: `Model.ctxBytesPer1kTokens == 0` is the
-    // "probe pending" sentinel, so a measured zero would leave the row on
-    // "estimating..." forever. Real zeros happen -- decision models like Laya
-    // keep no KV cache that grows with ctx (482 MiB at both 4k and 128k).
-    let bBytesPer1k = max(Int(bPerToken * 1000.0 * 1_048_576.0), 1)
 
     logger.info(
       "Mem profile (affine): total(\(ctxLo))=\(loMib) MiB, total(\(ctxHi))=\(hiMib) MiB → a=\(aBytes) bytes, b=\(bBytesPer1k) bytes/1k"
@@ -110,9 +103,9 @@ enum MemProfileRunner {
   /// `-fitp on` writes one line per device to stdout, e.g.:
   ///   MTL0 2402 2734 517
   ///   Host 680 0 538
-  /// We sum every numeric column across every row — on Apple Silicon unified
-  /// memory every row draws from the same physical RAM, so all rows count
-  /// toward the same budget.
+  /// The core sums every numeric column across every row — on Apple Silicon
+  /// unified memory every row draws from the same physical RAM, so all rows
+  /// count toward the same budget.
   private static func probeTotalMib(
     llama: String, modelPath: String, ctx: UInt32
   ) async -> Int? {
@@ -154,27 +147,15 @@ enum MemProfileRunner {
 
       let output = String(decoding: stdout, as: UTF8.self)
 
-      // Each device row is `<name> <model> <context> <compute>` — a non-numeric
-      // device name followed by three ints. We require that first-token-is-text
-      // shape explicitly so a stray all-numeric line (if stderr ever leaks into
-      // stdout, or the format changes) can't masquerade as a row.
-      var totalMib = 0
-      var rowCount = 0
-      for line in output.split(separator: "\n") {
-        let tokens = line.split(separator: " ", omittingEmptySubsequences: true)
-        guard tokens.count == 4, Int(tokens[0]) == nil,
-          let m = Int(tokens[1]), let c = Int(tokens[2]), let cp = Int(tokens[3])
-        else { continue }
-        totalMib += m + c + cp
-        rowCount += 1
-      }
-
-      guard rowCount > 0 else {
+      // The core parses the `-fitp` rows: each is a non-numeric device name
+      // followed by three ints (model/context/compute), summed across rows.
+      // A response of `null` means no usable row was found.
+      let out = LlamaCore.callJSON("engine.parseFitp", ["output": output])
+      guard let total = (out?["sum"] as? NSNumber)?.intValue else {
         logger.error("Failed to parse -fitp output for ctx=\(ctx): \(output.prefix(500))")
         return nil
       }
-
-      return totalMib
+      return total
     } onCancel: {
       if process.isRunning {
         process.terminate()
@@ -187,50 +168,46 @@ enum MemProfileRunner {
 /// Stored in ~/Library/Caches/{bundleId}/MemProfile/ — the macOS-standard
 /// location for derived, recreatable data. If the system purges the cache, we
 /// re-probe.
+///
+/// The file naming (SHA-256 of the id) and the JSON write/read live in the Rust
+/// core (`engine.memCacheGet` / `engine.memCacheSet`); this type supplies the
+/// platform cache directory.
 enum MemProfileCache {
 
   private static let logger = Logger(subsystem: Logging.subsystem, category: "MemProfileCache")
 
   /// Returns the cached MemProfile for a model ID, or nil if not cached.
   static func get(modelId: String) -> MemProfile? {
-    let path = cachePath(for: modelId)
-    guard let data = try? Data(contentsOf: path) else { return nil }
-    return try? JSONDecoder().decode(MemProfile.self, from: data)
+    guard
+      let out = LlamaCore.callJSON("engine.memCacheGet", [
+        "cacheDir": cacheDir.path, "modelId": modelId,
+      ]),
+      let profile = out["profile"] as? [String: Any],
+      let ctxBytesPer1kTokens = (profile["ctxBytesPer1kTokens"] as? NSNumber)?.intValue,
+      let residentBytes = (profile["residentBytes"] as? NSNumber)?.intValue
+    else { return nil }
+    return MemProfile(ctxBytesPer1kTokens: ctxBytesPer1kTokens, residentBytes: residentBytes)
   }
 
   /// Stores a MemProfile for a model ID.
   static func set(_ profile: MemProfile, for modelId: String) {
-    let path = cachePath(for: modelId)
-    do {
-      try FileManager.default.createDirectory(
-        at: path.deletingLastPathComponent(), withIntermediateDirectories: true
-      )
-      let data = try JSONEncoder().encode(profile)
-      try data.write(to: path, options: .atomic)
-    } catch {
-      logger.error("Failed to cache mem profile for \(modelId): \(error.localizedDescription)")
+    let out = LlamaCore.callJSON("engine.memCacheSet", [
+      "cacheDir": cacheDir.path,
+      "modelId": modelId,
+      "ctxBytesPer1kTokens": profile.ctxBytesPer1kTokens,
+      "residentBytes": profile.residentBytes,
+    ])
+    if let error = out?["error"] as? String {
+      logger.error("Failed to cache mem profile for \(modelId): \(error)")
     }
   }
 
   // MARK: - Private
-
-  /// Returns the cache file path for a model ID.
-  /// Uses SHA256 of the model ID to avoid filesystem-unfriendly characters.
-  private static func cachePath(for modelId: String) -> URL {
-    let hash = sha256(modelId)
-    return cacheDir.appendingPathComponent("\(hash).json")
-  }
 
   private static var cacheDir: URL {
     let bundleId = Bundle.main.bundleIdentifier ?? "app.llama.Llama"
     return FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
       .appendingPathComponent(bundleId)
       .appendingPathComponent("MemProfile")
-  }
-
-  /// First 16 bytes of the SHA256, hex-encoded. Truncated to keep file names
-  /// short; changing the length would orphan every existing cache entry.
-  private static func sha256(_ string: String) -> String {
-    SHA256.hash(data: Data(string.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
   }
 }
