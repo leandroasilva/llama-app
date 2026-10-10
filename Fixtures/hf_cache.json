@@ -1,0 +1,173 @@
+{
+  "pathHelpers": {
+    "repoDirName": [
+      {
+        "url": "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/file.gguf",
+        "name": "models--unsloth--Qwen3.5-2B-GGUF"
+      },
+      {
+        "url": "https://huggingface.co/org/repo/resolve/main/Q4_K_M/model.gguf",
+        "name": "models--org--repo"
+      },
+      {
+        "url": "https://huggingface.co/org/repo/blob/main/file.gguf",
+        "name": null
+      },
+      {
+        "url": "https://huggingface.co/org/repo",
+        "name": null
+      }
+    ],
+    "repoRelativePath": [
+      {
+        "url": "https://huggingface.co/org/repo/resolve/main/Q4_K_M/model.gguf",
+        "path": "Q4_K_M/model.gguf"
+      },
+      {
+        "url": "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/file.gguf",
+        "path": "file.gguf"
+      },
+      {
+        "url": "https://huggingface.co/org/repo/resolve/main",
+        "path": null
+      }
+    ]
+  },
+  "scan": {
+    "cacheDir": "hf_cache/cache",
+    "entries": [
+      {
+        "id": "org/Decision-GGUF:Q4_K_M",
+        "ctxWindow": 32768,
+        "fileSize": 162,
+        "draftHead": null,
+        "isDecisionModel": true,
+        "usesMTP": false,
+        "mmprojFile": null,
+        "draftSidecarFile": null,
+        "additionalParts": [],
+        "hfRepoDirName": "models--org--Decision-GGUF",
+        "modelFile": "models--org--Decision-GGUF/snapshots/commit4/model-Q4_K_M.gguf"
+      },
+      {
+        "id": "org/Embedded-GGUF:Q4_K_M",
+        "ctxWindow": 40960,
+        "fileSize": 296,
+        "draftHead": "mtp",
+        "isDecisionModel": false,
+        "usesMTP": true,
+        "mmprojFile": null,
+        "draftSidecarFile": null,
+        "additionalParts": [],
+        "hfRepoDirName": "models--org--Embedded-GGUF",
+        "modelFile": "models--org--Embedded-GGUF/snapshots/commit5/embed-Q4_K_M.gguf"
+      },
+      {
+        "id": "unsloth/MTP-GGUF:Q8_0",
+        "ctxWindow": 8192,
+        "fileSize": 107,
+        "draftHead": "mtp",
+        "isDecisionModel": false,
+        "usesMTP": false,
+        "mmprojFile": null,
+        "draftSidecarFile": "models--unsloth--MTP-GGUF/snapshots/commit3/mtp-Q8_0.gguf",
+        "additionalParts": [],
+        "hfRepoDirName": "models--unsloth--MTP-GGUF",
+        "modelFile": "models--unsloth--MTP-GGUF/snapshots/commit3/model-Q8_0.gguf"
+      },
+      {
+        "id": "unsloth/Sharded-GGUF:Q4_K_M",
+        "ctxWindow": 8192,
+        "fileSize": 403,
+        "draftHead": null,
+        "isDecisionModel": false,
+        "usesMTP": false,
+        "mmprojFile": null,
+        "draftSidecarFile": null,
+        "additionalParts": [
+          "models--unsloth--Sharded-GGUF/snapshots/commit2/Q4_K_M/shard-Q4_K_M-00002-of-00002.gguf"
+        ],
+        "hfRepoDirName": "models--unsloth--Sharded-GGUF",
+        "modelFile": "models--unsloth--Sharded-GGUF/snapshots/commit2/Q4_K_M/shard-Q4_K_M-00001-of-00002.gguf"
+      },
+      {
+        "id": "unsloth/Tiny-GGUF:Q4_K_M",
+        "ctxWindow": 8192,
+        "fileSize": 121,
+        "draftHead": null,
+        "isDecisionModel": false,
+        "usesMTP": false,
+        "mmprojFile": "models--unsloth--Tiny-GGUF/snapshots/commit1/mmproj-f16.gguf",
+        "draftSidecarFile": null,
+        "additionalParts": [],
+        "hfRepoDirName": "models--unsloth--Tiny-GGUF",
+        "modelFile": "models--unsloth--Tiny-GGUF/snapshots/commit1/tiny-Q4_K_M.gguf"
+      }
+    ]
+  },
+  "partialBytes": [
+    {
+      "modelId": "unsloth/Tiny-GGUF:Q4_K_M",
+      "bytes": 20
+    },
+    {
+      "modelId": "org/Other-GGUF:Q8_0",
+      "bytes": 0
+    },
+    {
+      "modelId": "unsloth/Missing-GGUF:Q4_K_M",
+      "bytes": 0
+    }
+  ],
+  "scanPlaceholders": {
+    "cacheDir": "hf_cache/cache",
+    "paths": [
+      ".llama-partial/unsloth/Tiny-GGUF:Q4_K_M/.model.json",
+      ".llama-partial/org/Other-GGUF:Q8_0/.model.json"
+    ]
+  },
+  "snapshotFileExists": [
+    {
+      "repoDir": "models--unsloth--Tiny-GGUF",
+      "filename": "tiny-Q4_K_M.gguf",
+      "value": true
+    },
+    {
+      "repoDir": "models--unsloth--Tiny-GGUF",
+      "filename": "nope.gguf",
+      "value": false
+    },
+    {
+      "repoDir": "models--unsloth--Tiny-GGUF",
+      "filename": "Q4_K_M/model.gguf",
+      "value": false
+    },
+    {
+      "repoDir": "models--nope--Missing",
+      "filename": "x.gguf",
+      "value": false
+    }
+  ],
+  "writeBlobAndLink": {
+    "repoDir": "models--test--wbl",
+    "commit": "deadbeefcafe",
+    "blobHash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "filename": "Q4_K_M/model-Q4_K_M.gguf",
+    "expectedSymlinkTarget": "../../../blobs/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "expectedRefsMain": "deadbeefcafe"
+  },
+  "deleteModelFiles": {
+    "repoDir": "models--unsloth--Tiny-GGUF",
+    "modelFile": "models--unsloth--Tiny-GGUF/snapshots/commit1/tiny-Q4_K_M.gguf",
+    "additionalParts": [],
+    "mmprojFile": "models--unsloth--Tiny-GGUF/snapshots/commit1/mmproj-f16.gguf",
+    "expected": {
+      "modelFileExists": false,
+      "mmprojFileExists": false,
+      "blobsDirExists": false,
+      "snapshotsDirExists": false,
+      "repoDirExists": true,
+      "refsMainExists": true
+    }
+  }
+}

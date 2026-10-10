@@ -10,7 +10,9 @@
 
 use llama_core::config::{aliases, ini};
 use llama_core::engine::LlamaVersion;
-use llama_core::hf::{GGUFQuant, HFRepoParser, SidecarPicker};
+use llama_core::hf::{
+    GGUFMetadata, GGUFQuant, HFCache, HFRepoParser, SidecarPicker, SideloadedEntry,
+};
 use llama_core::models::{model, ContextTier, DraftHead, ModelIdParser, ModelMem, ResolvedPaths};
 use serde_json::{json, Value};
 use std::ffi::{c_char, c_int, CStr, CString};
@@ -224,6 +226,48 @@ fn parsed_to_value(p: &llama_core::models::Parsed) -> Value {
     })
 }
 
+fn resolved_paths_from_value(v: &Value) -> ResolvedPaths {
+    let opt = |key: &str| v.get(key).and_then(Value::as_str).map(str::to_string);
+    ResolvedPaths {
+        model_file: v
+            .get("modelFile")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        additional_parts: strings_from_value(v.get("additionalParts").unwrap_or(&Value::Null)),
+        mmproj_file: opt("mmprojFile"),
+        uses_mtp: v.get("usesMTP").and_then(Value::as_bool).unwrap_or(false),
+        draft_sidecar_file: opt("draftSidecarFile"),
+        hf_repo_dir_name: v
+            .get("hfRepoDirName")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+    }
+}
+
+fn resolved_paths_to_value(rp: &ResolvedPaths) -> Value {
+    json!({
+        "modelFile": rp.model_file,
+        "additionalParts": rp.additional_parts,
+        "mmprojFile": rp.mmproj_file,
+        "usesMTP": rp.uses_mtp,
+        "draftSidecarFile": rp.draft_sidecar_file,
+        "hfRepoDirName": rp.hf_repo_dir_name,
+    })
+}
+
+fn sideloaded_entry_to_value(e: &SideloadedEntry) -> Value {
+    json!({
+        "id": e.id,
+        "ctxWindow": e.ctx_window,
+        "fileSize": e.file_size,
+        "draftHead": e.scanned_draft_head.map(|d| d.as_str()),
+        "isDecisionModel": e.is_decision_model,
+        "paths": resolved_paths_to_value(&e.paths),
+    })
+}
+
 fn dispatch(method: &str, args: &Value) -> Value {
     // Development-only escape hatch used by tests to prove that a panic is
     // caught at the boundary rather than unwinding into the host.
@@ -273,6 +317,94 @@ fn dispatch(method: &str, args: &Value) -> Value {
         }
         "quant.matches" => {
             json!({ "value": GGUFQuant::matches(arg_str("a"), arg_str("b")) })
+        }
+
+        // ---- Fase 2: GGUF metadata header ----
+        "gguf.contextLength" => match GGUFMetadata::context_length(arg_str("path")) {
+            None => Value::Null,
+            Some(length) => json!({ "parsed": true, "length": length }),
+        },
+        "gguf.hasEmbeddedMTPHead" => match GGUFMetadata::has_embedded_mtp_head(arg_str("path")) {
+            None => Value::Null,
+            Some(value) => json!({ "value": value }),
+        },
+        "gguf.isDecisionModel" => match GGUFMetadata::is_decision_model(arg_str("path")) {
+            None => Value::Null,
+            Some(value) => json!({ "value": value }),
+        },
+
+        // ---- Fase 2: HFCache ----
+        "hfCache.repoDirName" => {
+            json!({ "name": HFCache::repo_dir_name_from_url(arg_str("url")) })
+        }
+        "hfCache.repoRelativePath" => {
+            json!({ "path": HFCache::repo_relative_path_from_url(arg_str("url")) })
+        }
+        "hfCache.partialDir" => json!({
+            "path": HFCache::partial_dir(arg_str("cacheDir"), arg_str("modelId"))
+                .to_string_lossy()
+        }),
+        "hfCache.partialPath" => json!({
+            "path": HFCache::partial_path(arg_str("cacheDir"), arg_str("modelId"), arg_str("filename"))
+                .to_string_lossy()
+        }),
+        "hfCache.placeholderURL" => json!({
+            "path": HFCache::placeholder_url(arg_str("cacheDir"), arg_str("modelId"))
+                .to_string_lossy()
+        }),
+        "hfCache.removePartials" => {
+            HFCache::remove_partials(arg_str("cacheDir"), arg_str("modelId"));
+            json!({ "ok": true })
+        }
+        "hfCache.partialBytes" => json!({
+            "bytes": HFCache::partial_bytes(arg_str("cacheDir"), arg_str("modelId"))
+        }),
+        "hfCache.scanPlaceholders" => {
+            let paths: Vec<String> = HFCache::scan_placeholders(arg_str("cacheDir"))
+                .iter()
+                .map(|p| p.to_string_lossy().into_owned())
+                .collect();
+            json!({ "paths": paths })
+        }
+        "hfCache.cleanInstalledPartials" => {
+            let ids: std::collections::HashSet<String> =
+                strings_from_value(args.get("installedIds").unwrap_or(&Value::Null))
+                    .into_iter()
+                    .collect();
+            HFCache::clean_installed_partials(arg_str("cacheDir"), &ids);
+            json!({ "ok": true })
+        }
+        "hfCache.snapshotFileExists" => json!({
+            "value": HFCache::snapshot_file_exists(
+                arg_str("cacheDir"), arg_str("repoDir"), arg_str("filename")
+            )
+        }),
+        "hfCache.writeBlobAndLink" => {
+            match HFCache::write_blob_and_link(
+                arg_str("cacheDir"),
+                arg_str("repoDir"),
+                arg_str("commit"),
+                arg_str("blobHash"),
+                arg_str("filename"),
+                arg_str("tempFile"),
+            ) {
+                Ok(()) => json!({ "ok": true }),
+                Err(e) => json!({ "error": e.to_string() }),
+            }
+        }
+        "hfCache.deleteModelFiles" => {
+            let paths = resolved_paths_from_value(args.get("paths").unwrap_or(&Value::Null));
+            match HFCache::delete_model_files(arg_str("cacheDir"), arg_str("repoDir"), &paths) {
+                Ok(()) => json!({ "ok": true }),
+                Err(e) => json!({ "error": e.to_string() }),
+            }
+        }
+        "hfCache.scanForSideloaded" => {
+            let entries: Vec<Value> = HFCache::scan_for_sideloaded(arg_str("cacheDir"))
+                .iter()
+                .map(sideloaded_entry_to_value)
+                .collect();
+            json!({ "entries": entries })
         }
 
         // ---- Fase 1: DraftHead ----

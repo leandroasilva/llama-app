@@ -194,3 +194,131 @@ fn fase1_ini_and_aliases() {
         r#"{"section":{"name":"M","pairs":[{"key":"alias","value":"a,b"}]}}"#
     );
 }
+
+fn fixture_path(rel: &str) -> String {
+    let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("Fixtures")
+        .join(rel);
+    p.to_str().unwrap().to_string()
+}
+
+#[test]
+fn fase2_gguf_metadata() {
+    let full = serde_json::json!({ "path": fixture_path("gguf/full.gguf") }).to_string();
+    assert_eq!(
+        call("gguf.contextLength", &full).unwrap(),
+        r#"{"length":40960,"parsed":true}"#
+    );
+    assert_eq!(
+        call("gguf.hasEmbeddedMTPHead", &full).unwrap(),
+        r#"{"value":true}"#
+    );
+    assert_eq!(
+        call("gguf.isDecisionModel", &full).unwrap(),
+        r#"{"value":false}"#
+    );
+
+    // Header parses but the key is absent -> present object with null length.
+    let nocontext = serde_json::json!({ "path": fixture_path("gguf/nocontext.gguf") }).to_string();
+    assert_eq!(
+        call("gguf.contextLength", &nocontext).unwrap(),
+        r#"{"length":null,"parsed":true}"#
+    );
+
+    // Unparseable -> a whole `null` response.
+    let junk = serde_json::json!({ "path": fixture_path("gguf/notgguf.gguf") }).to_string();
+    assert_eq!(call("gguf.contextLength", &junk).unwrap(), "null");
+    assert_eq!(call("gguf.hasEmbeddedMTPHead", &junk).unwrap(), "null");
+}
+
+#[test]
+fn fase2_hf_cache() {
+    let cache = fixture_path("hf_cache/cache");
+
+    let url = serde_json::json!({
+        "url": "https://huggingface.co/unsloth/Qwen3.5-2B-GGUF/resolve/main/file.gguf"
+    })
+    .to_string();
+    assert_eq!(
+        call("hfCache.repoDirName", &url).unwrap(),
+        r#"{"name":"models--unsloth--Qwen3.5-2B-GGUF"}"#
+    );
+    assert_eq!(
+        call("hfCache.repoRelativePath", &url).unwrap(),
+        r#"{"path":"file.gguf"}"#
+    );
+
+    let scan = serde_json::json!({ "cacheDir": cache }).to_string();
+    let json = call("hfCache.scanForSideloaded", &scan).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let entries = v.get("entries").unwrap().as_array().unwrap();
+    let mut ids: Vec<&str> = entries
+        .iter()
+        .map(|e| e.get("id").unwrap().as_str().unwrap())
+        .collect();
+    ids.sort();
+    assert_eq!(
+        ids,
+        vec![
+            "org/Decision-GGUF:Q4_K_M",
+            "org/Embedded-GGUF:Q4_K_M",
+            "unsloth/MTP-GGUF:Q8_0",
+            "unsloth/Sharded-GGUF:Q4_K_M",
+            "unsloth/Tiny-GGUF:Q4_K_M",
+        ]
+    );
+
+    let pb =
+        serde_json::json!({ "cacheDir": cache, "modelId": "unsloth/Tiny-GGUF:Q4_K_M" }).to_string();
+    assert_eq!(
+        call("hfCache.partialBytes", &pb).unwrap(),
+        r#"{"bytes":20}"#
+    );
+
+    let sfe = serde_json::json!({
+        "cacheDir": cache,
+        "repoDir": "models--unsloth--Tiny-GGUF",
+        "filename": "tiny-Q4_K_M.gguf"
+    })
+    .to_string();
+    assert_eq!(
+        call("hfCache.snapshotFileExists", &sfe).unwrap(),
+        r#"{"value":true}"#
+    );
+}
+
+#[test]
+fn fase2_hf_cache_write_blob_and_link() {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let tmp = std::env::temp_dir().join(format!("llama-ffi-wbl-{}-{nanos}", std::process::id()));
+    let cache = tmp.join("cache");
+    std::fs::create_dir_all(&cache).unwrap();
+    let temp_file = tmp.join("upload.tmp");
+    std::fs::write(&temp_file, b"blob-content").unwrap();
+
+    let args = serde_json::json!({
+        "cacheDir": cache.to_str().unwrap(),
+        "repoDir": "models--x--y",
+        "commit": "c0ffee",
+        "blobHash": "abcdef",
+        "filename": "sub/model-Q4_K_M.gguf",
+        "tempFile": temp_file.to_str().unwrap(),
+    })
+    .to_string();
+    assert_eq!(
+        call("hfCache.writeBlobAndLink", &args).unwrap(),
+        r#"{"ok":true}"#
+    );
+
+    let symlink = cache.join("models--x--y/snapshots/c0ffee/sub/model-Q4_K_M.gguf");
+    assert_eq!(
+        std::fs::read_link(&symlink).unwrap().to_string_lossy(),
+        "../../../blobs/abcdef"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}

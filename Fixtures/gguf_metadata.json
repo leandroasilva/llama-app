@@ -1,0 +1,127 @@
+{
+  "files": [
+    {
+      "file": "gguf/full.gguf",
+      "contextLength": {
+        "parsed": true,
+        "length": 40960
+      },
+      "hasEmbeddedMTPHead": {
+        "parsed": true,
+        "value": true
+      },
+      "isDecisionModel": {
+        "parsed": true,
+        "value": false
+      }
+    },
+    {
+      "file": "gguf/nomtp.gguf",
+      "contextLength": {
+        "parsed": true,
+        "length": 8192
+      },
+      "hasEmbeddedMTPHead": {
+        "parsed": true,
+        "value": false
+      },
+      "isDecisionModel": {
+        "parsed": true,
+        "value": false
+      }
+    },
+    {
+      "file": "gguf/decision.gguf",
+      "contextLength": {
+        "parsed": true,
+        "length": 32768
+      },
+      "hasEmbeddedMTPHead": {
+        "parsed": true,
+        "value": false
+      },
+      "isDecisionModel": {
+        "parsed": true,
+        "value": true
+      }
+    },
+    {
+      "file": "gguf/nocontext.gguf",
+      "contextLength": {
+        "parsed": true,
+        "length": null
+      },
+      "hasEmbeddedMTPHead": {
+        "parsed": true,
+        "value": false
+      },
+      "isDecisionModel": {
+        "parsed": true,
+        "value": false
+      }
+    },
+    {
+      "file": "gguf/zeromtp.gguf",
+      "contextLength": {
+        "parsed": true,
+        "length": 131072
+      },
+      "hasEmbeddedMTPHead": {
+        "parsed": true,
+        "value": false
+      },
+      "isDecisionModel": {
+        "parsed": true,
+        "value": false
+      }
+    },
+    {
+      "file": "gguf/notgguf.gguf",
+      "contextLength": {
+        "parsed": false
+      },
+      "hasEmbeddedMTPHead": {
+        "parsed": false
+      },
+      "isDecisionModel": {
+        "parsed": false
+      }
+    },
+    {
+      "file": "gguf/v1.gguf",
+      "contextLength": {
+        "parsed": false
+      },
+      "hasEmbeddedMTPHead": {
+        "parsed": false
+      },
+      "isDecisionModel": {
+        "parsed": false
+      }
+    },
+    {
+      "file": "gguf/truncated.gguf",
+      "contextLength": {
+        "parsed": false
+      },
+      "hasEmbeddedMTPHead": {
+        "parsed": false
+      },
+      "isDecisionModel": {
+        "parsed": false
+      }
+    },
+    {
+      "file": "gguf/unknowntype.gguf",
+      "contextLength": {
+        "parsed": false
+      },
+      "hasEmbeddedMTPHead": {
+        "parsed": false
+      },
+      "isDecisionModel": {
+        "parsed": false
+      }
+    }
+  ]
+}
