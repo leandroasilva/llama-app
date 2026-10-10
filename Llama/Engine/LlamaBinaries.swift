@@ -20,12 +20,10 @@ enum LlamaBinaries {
   /// The curl-install path the app manages (matches `install.sh`'s layout).
   /// The real binary lives in `~/.llama-app`; `install.sh` also drops a
   /// `~/.local/bin/llama` symlink onto PATH, but the app points at the real file.
+  /// Computed by the core (`engine.managedPath`).
   static let managedPath: String =
-    (NSHomeDirectory() as NSString).appendingPathComponent(".llama-app/llama")
-
-  /// Unmanaged locations to probe when the app hasn't installed its own binary.
-  /// Covers the Homebrew bin dirs (Apple Silicon and Intel).
-  private static let unmanagedDirs = ["/opt/homebrew/bin", "/usr/local/bin"]
+    LlamaCore.callValue("engine.managedPath", "path", ["home": NSHomeDirectory()])
+    ?? (NSHomeDirectory() as NSString).appendingPathComponent(".llama-app/llama")
 
   /// The build the app installs and keeps its own binary at -- the pinned
   /// target, not whatever is newest. Bump per app release after smoke-testing
@@ -47,26 +45,25 @@ enum LlamaBinaries {
   /// update; `brew` and `external` are both used as-is and never modified.
   /// Brew is split out so the footer can hint at the actual update channel
   /// (`brew upgrade`) instead of a generic "external" marker.
-  enum Origin: Equatable { case managed, brew, external }
+  enum Origin: Equatable {
+    case managed, brew, external
 
-  /// Whether the binary at `path` is a Homebrew install. Follows symlinks and
-  /// checks for Homebrew's Cellar layout (`bin/llama` is a symlink into
-  /// `../Cellar/llama.cpp/...`) rather than the bin dir alone -- /usr/local/bin
-  /// also hosts manual installs.
-  private static func isHomebrew(at path: String) -> Bool {
-    (path as NSString).resolvingSymlinksInPath.contains("/Cellar/")
+    init?(_ raw: String) {
+      switch raw {
+      case "managed": self = .managed
+      case "brew": self = .brew
+      case "external": self = .external
+      default: return nil
+      }
+    }
   }
 
   /// Resolves the active `llama` binary: the managed path wins, then the
   /// unmanaged locations in order. Nil when none is found, which is what sends
-  /// the app down the install flow.
+  /// the app down the install flow. The resolution (including Homebrew's Cellar
+  /// detection) lives in the core (`engine.binariesResolve`).
   static func resolve() -> (path: String, origin: Origin)? {
-    let fm = FileManager.default
-
-    if fm.isExecutableFile(atPath: managedPath) {
-      return (managedPath, .managed)
-    }
-
+    var ignore = false
     #if DEBUG
       // Dev affordance: pretend unmanaged installs (e.g. Homebrew) aren't present,
       // so the missing -> install path can be exercised on a machine that already
@@ -74,18 +71,17 @@ enum LlamaBinaries {
       //   defaults write app.llama.Llama.dev ignoreUnmanagedLlama -bool YES
       if UserDefaults.standard.bool(forKey: "ignoreUnmanagedLlama") {
         logger.debug("ignoreUnmanagedLlama set; ignoring unmanaged installs")
-        return nil
+        ignore = true
       }
     #endif
 
-    for dir in unmanagedDirs {
-      let path = dir + "/llama"
-      if fm.isExecutableFile(atPath: path) {
-        return (path, isHomebrew(at: path) ? .brew : .external)
-      }
-    }
-
-    return nil
+    guard let out = LlamaCore.callJSON("engine.binariesResolve", [
+      "home": NSHomeDirectory(),
+      "ignoreUnmanaged": ignore,
+    ]), let path = out["path"] as? String, let raw = out["origin"] as? String,
+      let origin = Origin(raw)
+    else { return nil }
+    return (path, origin)
   }
 
   /// The path to the `llama` binary to invoke, or `nil` if none is installed.
@@ -99,31 +95,12 @@ enum LlamaBinaries {
   }
 
   /// Reads the version reported by the binary at `path`, or nil if it can't be
-  /// run or its output can't be parsed. Runs `<path> version`, which just prints
-  /// the build and exits -- no model load. Blocks on the subprocess, so call off
-  /// the main thread.
+  /// run or its output can't be parsed. The subprocess and parse live in the
+  /// core (`engine.readVersion`); it just prints the build and exits -- no model
+  /// load. Blocks on the subprocess, so call off the main thread.
   static func readVersion(at path: String) -> LlamaVersion? {
-    let proc = Process()
-    proc.executableURL = URL(fileURLWithPath: path)
-    proc.arguments = ["version"]
-    // Capture both streams into one pipe: which stream carries the version has
-    // changed across builds (e.g. b10679 prints it to stderr, b11200 to
-    // stdout), and the parser finds the build number either way.
-    let out = Pipe()
-    proc.standardOutput = out
-    proc.standardError = out
-
-    do {
-      try proc.run()
-    } catch {
-      logger.error(
-        "Couldn't run \(path, privacy: .public) version: \(error.localizedDescription, privacy: .public)"
-      )
-      return nil
-    }
-    let data = out.fileHandleForReading.readDataToEndOfFile()
-    proc.waitUntilExit()
-    guard proc.terminationStatus == 0 else { return nil }
-    return LlamaVersion(parsing: String(decoding: data, as: UTF8.self))
+    guard let build: Int = LlamaCore.callValue("engine.readVersion", "build", ["path": path])
+    else { return nil }
+    return LlamaVersion(build: build)
   }
 }

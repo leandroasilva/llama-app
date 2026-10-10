@@ -10,6 +10,9 @@ struct LlamaVersion: Comparable, CustomStringConvertible {
   /// The build number, e.g. `9370` for `b9370`.
   let build: Int
 
+  /// Wraps a build number the core has already parsed (e.g. `engine.readVersion`).
+  init(build: Int) { self.build = build }
+
   /// Parses a pinned tag (`b9370`) or `llama version` output, which comes in
   /// two formats:
   /// - `b9370-aa50b2c2a` -- builds before b10398
