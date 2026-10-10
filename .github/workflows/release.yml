@@ -200,8 +200,9 @@ jobs:
           mkdir -p build/appcast-release
           cp "build/${{ env.PRODUCT_NAME }}.dmg" build/appcast-release/
 
-          build/Sparkle-tools/bin/generate_appcast \
+          echo "$SPARKLE_PRIVATE_KEY" | build/Sparkle-tools/bin/generate_appcast \
             build/appcast-release \
+            --ed-key-file - \
             --download-url-prefix "https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.version }}/"
 
           cp build/appcast-release/appcast.xml build/appcast.xml

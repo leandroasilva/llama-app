@@ -21,7 +21,7 @@
 	<key>SUFeedURL</key>
 	<string>https://github.com/leandroasilva/llama-app/releases/latest/download/appcast.xml</string>
 	<key>SUPublicEDKey</key>
-	<string>$(SPARKLE_PUBLIC_KEY)</string>
+	<string>j8js9wjH34np3g9cxktbDcaIKA0IMqdqjPnL1Ybee8I=</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUScheduledCheckInterval</key>
