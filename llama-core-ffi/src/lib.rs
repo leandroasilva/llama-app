@@ -9,7 +9,7 @@
 //! - Complex payloads travel as JSON; this keeps the ABI small and stable.
 
 use llama_core::config::{aliases, ini};
-use llama_core::engine::LlamaVersion;
+use llama_core::engine::{binaries, installer, mem_profile, LlamaVersion};
 use llama_core::hf::{
     GGUFMetadata, GGUFQuant, HFCache, HFRepoParser, SidecarPicker, SideloadedEntry,
 };
@@ -809,6 +809,136 @@ fn dispatch(method: &str, args: &Value) -> Value {
                 args.get("to").and_then(Value::as_str),
             )
         }),
+
+        // ---- Fase 4: Engine (LlamaBinaries / LlamaInstaller leaves / MemProfile) ----
+        "engine.managedPath" => json!({
+            "path": binaries::managed_path(arg_str("home"))
+        }),
+        "engine.metalConfig" => match installer::metal_config(arg_str("brand")) {
+            Ok(config) => json!({ "config": config }),
+            Err(e) => json!({ "error": e.kind(), "message": e.message() }),
+        },
+        "engine.artifactUrl" => json!({
+            "url": installer::artifact_url(arg_str("version"), arg_str("config"))
+        }),
+        "engine.unzstdUrl" => json!({
+            "url": installer::unzstd_url(arg_str("version"))
+        }),
+        "engine.binariesResolve" => {
+            let unmanaged_dirs: Vec<String> =
+                match args.get("unmanagedDirs").and_then(Value::as_array) {
+                    // An array is used verbatim (empty = "search nothing") so the
+                    // host can pin a temp dir in tests; absent defaults to the
+                    // Well-Known Homebrew dirs for real use.
+                    Some(a) => a
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect(),
+                    None => binaries::UNMANAGED_DIRS
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect(),
+                };
+            let ignore = args
+                .get("ignoreUnmanaged")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            match binaries::resolve(arg_str("home"), &unmanaged_dirs, ignore) {
+                Some((path, origin)) => json!({ "origin": origin.as_str(), "path": path }),
+                None => Value::Null,
+            }
+        }
+        "engine.readVersion" => json!({
+            "build": binaries::read_version(arg_str("path")).map(|v| v.build)
+        }),
+        "engine.decompress" => {
+            match installer::decompress(arg_str("unzstd"), arg_str("zst"), arg_str("dest")) {
+                Ok(()) => json!({ "ok": true }),
+                Err(e) => json!({ "error": e.kind(), "message": e.message() }),
+            }
+        }
+        "engine.atomicInstall" => {
+            match installer::atomic_install(arg_str("src"), arg_str("dest")) {
+                Ok(()) => json!({ "ok": true }),
+                Err(e) => json!({ "error": e.kind(), "message": e.message() }),
+            }
+        }
+        "engine.ensurePathSymlink" => {
+            match installer::ensure_path_symlink(arg_str("home"), arg_str("llamaPath")) {
+                installer::PathSymlinkOutcome::Linked => json!({ "outcome": "linked" }),
+                installer::PathSymlinkOutcome::LeftExisting => {
+                    json!({ "outcome": "leftExisting" })
+                }
+                installer::PathSymlinkOutcome::Failed(message) => {
+                    json!({ "outcome": "failed", "message": message })
+                }
+            }
+        }
+        "engine.promoteStaged" => {
+            let target = LlamaVersion {
+                build: arg_i("targetBuild"),
+            };
+            match installer::promote_staged(
+                arg_str("staged"),
+                arg_str("live"),
+                target,
+                arg_str("home"),
+            ) {
+                installer::PromoteOutcome::NothingStaged => json!({ "outcome": "nothingStaged" }),
+                installer::PromoteOutcome::DiscardedStale => {
+                    json!({ "outcome": "discardedStale" })
+                }
+                installer::PromoteOutcome::Failed(message) => {
+                    json!({ "outcome": "failed", "message": message })
+                }
+                installer::PromoteOutcome::Promoted => json!({ "outcome": "promoted" }),
+            }
+        }
+        "engine.fit" => {
+            match mem_profile::fit(
+                arg_i("loMib"),
+                arg_i("hiMib"),
+                arg_i("ctxLo"),
+                arg_i("ctxHi"),
+            ) {
+                Some(p) => json!({
+                    "profile": {
+                        "ctxBytesPer1kTokens": p.ctx_bytes_per_1k_tokens,
+                        "residentBytes": p.resident_bytes,
+                        "schemaVersion": p.schema_version,
+                    }
+                }),
+                None => Value::Null,
+            }
+        }
+        "engine.parseFitp" => json!({ "sum": mem_profile::parse_fitp_output(arg_str("output")) }),
+        "engine.memCacheFileName" => {
+            json!({ "hash": mem_profile::cache_file_name(arg_str("modelId")) })
+        }
+        "engine.memCachePath" => {
+            json!({ "path": mem_profile::cache_path(arg_str("cacheDir"), arg_str("modelId")) })
+        }
+        "engine.memCacheGet" => {
+            match mem_profile::cache_get(arg_str("cacheDir"), arg_str("modelId")) {
+                Some(p) => json!({
+                    "profile": {
+                        "ctxBytesPer1kTokens": p.ctx_bytes_per_1k_tokens,
+                        "residentBytes": p.resident_bytes,
+                        "schemaVersion": p.schema_version,
+                    }
+                }),
+                None => json!({ "profile": Value::Null }),
+            }
+        }
+        "engine.memCacheSet" => {
+            let profile =
+                mem_profile::MemProfile::new(arg_i("ctxBytesPer1kTokens"), arg_i("residentBytes"));
+            match mem_profile::cache_set(arg_str("cacheDir"), arg_str("modelId"), &profile) {
+                Ok(()) => json!({ "ok": true }),
+                Err(message) => json!({ "error": message }),
+            }
+        }
 
         // Smoke test for the event channel.
         "emit.test" => {

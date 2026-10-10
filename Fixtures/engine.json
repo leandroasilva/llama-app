@@ -1,0 +1,146 @@
+{
+  "managedPath": [
+    { "home": "/Users/fixture", "path": "/Users/fixture/.llama-app/llama" },
+    { "home": "/Users/fixture/", "path": "/Users/fixture/.llama-app/llama" },
+    { "home": "/", "path": "/.llama-app/llama" }
+  ],
+  "metalConfig": [
+    { "brand": "Apple M1", "config": "m1" },
+    { "brand": "Apple M2 Max", "config": "m2" },
+    { "brand": "Apple M3 Pro", "config": "m3" },
+    { "brand": "Apple M4", "config": "m4" },
+    { "brand": "Apple M5", "config": "m5" },
+    { "brand": "Apple A18 Pro", "config": "a18" },
+    { "brand": "Apple M6 Pro", "config": "unsupportedHardware" },
+    { "brand": "Intel(R) Core(TM) i7-9750H CPU @ 2.60GHz", "config": "unsupportedHardware" }
+  ],
+  "artifactUrls": [
+    { "version": "b11429", "config": "m3", "url": "https://huggingface.co/buckets/ggml-org/install.sh/resolve/b11429/aarch64/macos/metal/m3/llama-app.zst" },
+    { "version": "b9831", "config": "a18", "url": "https://huggingface.co/buckets/ggml-org/install.sh/resolve/b9831/aarch64/macos/metal/a18/llama-app.zst" }
+  ],
+  "unzstdUrls": [
+    { "version": "b11429", "url": "https://huggingface.co/buckets/ggml-org/install.sh/resolve/b11429/aarch64/macos/unzstd" }
+  ],
+  "resolveCases": [
+    {
+      "name": "managed-wins",
+      "home": "<ROOT>/home",
+      "unmanagedDirs": ["<ROOT>/opt/homebrew/bin", "<ROOT>/usr/local/bin"],
+      "managed": { "exists": true, "exec": true },
+      "unmanaged": [
+        { "dir": "<ROOT>/opt/homebrew/bin", "kind": "brew" },
+        { "dir": "<ROOT>/usr/local/bin", "kind": "none" }
+      ],
+      "ignoreUnmanaged": false,
+      "expected": { "origin": "managed", "path": "<ROOT>/home/.llama-app/llama" }
+    },
+    {
+      "name": "managed-not-exec",
+      "home": "<ROOT>/home",
+      "unmanagedDirs": ["<ROOT>/opt/homebrew/bin", "<ROOT>/usr/local/bin"],
+      "managed": { "exists": true, "exec": false },
+      "unmanaged": [
+        { "dir": "<ROOT>/opt/homebrew/bin", "kind": "brew" },
+        { "dir": "<ROOT>/usr/local/bin", "kind": "external" }
+      ],
+      "ignoreUnmanaged": false,
+      "expected": { "origin": "brew", "path": "<ROOT>/opt/homebrew/bin/llama" }
+    },
+    {
+      "name": "external",
+      "home": "<ROOT>/home",
+      "unmanagedDirs": ["<ROOT>/opt/homebrew/bin", "<ROOT>/usr/local/bin"],
+      "managed": { "exists": false, "exec": false },
+      "unmanaged": [
+        { "dir": "<ROOT>/opt/homebrew/bin", "kind": "none" },
+        { "dir": "<ROOT>/usr/local/bin", "kind": "external" }
+      ],
+      "ignoreUnmanaged": false,
+      "expected": { "origin": "external", "path": "<ROOT>/usr/local/bin/llama" }
+    },
+    {
+      "name": "brew-before-external",
+      "home": "<ROOT>/home",
+      "unmanagedDirs": ["<ROOT>/opt/homebrew/bin", "<ROOT>/usr/local/bin"],
+      "managed": { "exists": false, "exec": false },
+      "unmanaged": [
+        { "dir": "<ROOT>/opt/homebrew/bin", "kind": "brew" },
+        { "dir": "<ROOT>/usr/local/bin", "kind": "external" }
+      ],
+      "ignoreUnmanaged": false,
+      "expected": { "origin": "brew", "path": "<ROOT>/opt/homebrew/bin/llama" }
+    },
+    {
+      "name": "ignore-unmanaged",
+      "home": "<ROOT>/home",
+      "unmanagedDirs": ["<ROOT>/opt/homebrew/bin", "<ROOT>/usr/local/bin"],
+      "managed": { "exists": false, "exec": false },
+      "unmanaged": [
+        { "dir": "<ROOT>/opt/homebrew/bin", "kind": "brew" },
+        { "dir": "<ROOT>/usr/local/bin", "kind": "none" }
+      ],
+      "ignoreUnmanaged": true,
+      "expected": { "origin": "none", "path": null }
+    },
+    {
+      "name": "none",
+      "home": "<ROOT>/home",
+      "unmanagedDirs": ["<ROOT>/opt/homebrew/bin", "<ROOT>/usr/local/bin"],
+      "managed": { "exists": false, "exec": false },
+      "unmanaged": [
+        { "dir": "<ROOT>/opt/homebrew/bin", "kind": "none" },
+        { "dir": "<ROOT>/usr/local/bin", "kind": "none" }
+      ],
+      "ignoreUnmanaged": false,
+      "expected": { "origin": "none", "path": null }
+    }
+  ],
+  "fitParams": [
+    {
+      "name": "swa-constant-intercept",
+      "loMib": 482,
+      "hiMib": 482,
+      "ctxLo": 2048,
+      "ctxHi": 524288,
+      "profile": { "ctxBytesPer1kTokens": 1, "residentBytes": 505413632, "schemaVersion": 2 }
+    },
+    {
+      "name": "affine",
+      "loMib": 2000,
+      "hiMib": 5000,
+      "ctxLo": 4096,
+      "ctxHi": 131072,
+      "profile": { "ctxBytesPer1kTokens": 24774193, "residentBytes": 1995676903, "schemaVersion": 2 }
+    },
+    {
+      "name": "tiny-slope-du",
+      "loMib": 1024,
+      "hiMib": 2048,
+      "ctxLo": 1,
+      "ctxHi": 2,
+      "profile": { "ctxBytesPer1kTokens": 1073741824000, "residentBytes": 0, "schemaVersion": 2 }
+    },
+    {
+      "name": "non-monotonic",
+      "loMib": 3000,
+      "hiMib": 2000,
+      "ctxLo": 4096,
+      "ctxHi": 131072,
+      "profile": null
+    }
+  ],
+  "fitpParse": [
+    { "name": "mtl-total", "output": "Total: 4424 MB\nMTL0 217 145 0", "sum": 362 },
+    { "name": "mv-row", "output": "MV0 911 831 0", "sum": 1742 },
+    { "name": "two-rows-sum", "output": "MLU0 10 8 0\nMLU1 20 15 1", "sum": 54 },
+    { "name": "header-only", "output": "  N_ctx    KV (MB)  total(  MB)  / (MB)\nMTL0 217 145 0", "sum": 362 },
+    { "name": "non-numeric-row", "output": "MTL0 abc 217 145", "sum": null },
+    { "name": "numeric-first-token", "output": "217 1 2 3", "sum": null },
+    { "name": "empty", "output": "", "sum": null },
+    { "name": "junk", "output": "Total: 4424 MB | 2048 ctx params: 8192 MB", "sum": null }
+  ],
+  "memProfileHash": [
+    { "modelId": "unsloth/Tiny-GGUF:Q4_K_M", "hash": "26fce773f312d183395cda0d5faa7fd8" },
+    { "modelId": "org/Model:Q4_0", "hash": "5de1d60b53c5e6d063a5ae9421de7b42" }
+  ]
+}

@@ -437,3 +437,312 @@ fn fase3_network() {
         r#"{"value":false}"#
     );
 }
+
+#[test]
+fn fase4_engine() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn fixtures_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("Fixtures")
+    }
+
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::SeqCst);
+    let root =
+        std::env::temp_dir().join(format!("llama-core-ffi-phase4-{}-{n}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let cleanup = || {
+        let _ = std::fs::remove_dir_all(&root);
+    };
+
+    fn make_exec(p: &std::path::Path) {
+        let mut perms = std::fs::metadata(p).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(p, perms).unwrap();
+    }
+
+    fn script(name: &str) -> PathBuf {
+        fixtures_dir().join("engine").join(name)
+    }
+
+    let home = root.join("home").to_string_lossy().into_owned();
+
+    // managedPath (pure string mapping).
+    let out: serde_json::Value = serde_json::from_str(
+        &call(
+            "engine.managedPath",
+            &serde_json::json!({ "home": "/Users/fixture" }).to_string(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(out["path"], "/Users/fixture/.llama-app/llama");
+
+    // metalConfig: matched and unsupported.
+    assert_eq!(
+        call("engine.metalConfig", r#"{"brand":"Apple M3 Pro"}"#).unwrap(),
+        r#"{"config":"m3"}"#
+    );
+    let out: serde_json::Value =
+        serde_json::from_str(&call("engine.metalConfig", r#"{"brand":"Apple M6 Pro"}"#).unwrap())
+            .unwrap();
+    assert_eq!(out["error"], "unsupportedHardware");
+
+    // Artifact URLs.
+    assert_eq!(
+        call(
+            "engine.artifactUrl",
+            r#"{"version":"b11429","config":"m3"}"#
+        )
+        .unwrap(),
+        r#"{"url":"https://huggingface.co/buckets/ggml-org/install.sh/resolve/b11429/aarch64/macos/metal/m3/llama-app.zst"}"#
+    );
+    assert_eq!(
+        call("engine.unzstdUrl", r#"{"version":"b11429"}"#).unwrap(),
+        r#"{"url":"https://huggingface.co/buckets/ggml-org/install.sh/resolve/b11429/aarch64/macos/unzstd"}"#
+    );
+
+    // binariesResolve: managed wins; else unmanaged; brew classified by Cellar.
+    // No managed file, explicitly empty search list → none.
+    let out: serde_json::Value = serde_json::from_str(
+        &call(
+            "engine.binariesResolve",
+            &serde_json::json!({
+                "home": home,
+                "unmanagedDirs": [],
+                "ignoreUnmanaged": false,
+            })
+            .to_string(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(out.is_null());
+
+    std::fs::create_dir_all(root.join("home/.llama-app")).unwrap();
+    std::fs::write(root.join("home/.llama-app/llama"), "managed").unwrap();
+    make_exec(&root.join("home/.llama-app/llama"));
+    let out: serde_json::Value = serde_json::from_str(
+        &call(
+            "engine.binariesResolve",
+            &serde_json::json!({
+                "home": home,
+                "unmanagedDirs": [],
+                "ignoreUnmanaged": false,
+            })
+            .to_string(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(out["origin"], "managed");
+    assert!(out["path"].as_str().unwrap().ends_with(".llama-app/llama"));
+
+    let plain_dir = root.join("usr/local/bin");
+    std::fs::create_dir_all(&plain_dir).unwrap();
+    std::fs::write(plain_dir.join("llama"), "plain").unwrap();
+    make_exec(&plain_dir.join("llama"));
+    std::fs::remove_dir_all(root.join("home/.llama-app")).unwrap();
+    let out: serde_json::Value = serde_json::from_str(
+        &call(
+            "engine.binariesResolve",
+            &serde_json::json!({
+                "home": home,
+                "unmanagedDirs": [plain_dir.to_string_lossy()],
+                "ignoreUnmanaged": false,
+            })
+            .to_string(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(out["origin"], "external");
+
+    let brew_bin = root.join("opt/homebrew/bin");
+    std::fs::create_dir_all(brew_bin.join("../Cellar/llama.cpp/1.0.0/bin")).unwrap();
+    std::fs::write(brew_bin.join("../Cellar/llama.cpp/1.0.0/bin/llama"), "brew").unwrap();
+    make_exec(&brew_bin.join("../Cellar/llama.cpp/1.0.0/bin/llama"));
+    symlink(
+        "../Cellar/llama.cpp/1.0.0/bin/llama",
+        brew_bin.join("llama"),
+    )
+    .unwrap();
+    let out: serde_json::Value = serde_json::from_str(
+        &call(
+            "engine.binariesResolve",
+            &serde_json::json!({
+                "home": home,
+                "unmanagedDirs": [brew_bin.to_string_lossy()],
+                "ignoreUnmanaged": false,
+            })
+            .to_string(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(out["origin"], "brew");
+
+    // readVersion runs the binary. Copy script to temp, chmod, and probe.
+    let bin = root.join("fake-llama");
+    std::fs::copy(script("fake-llama-ok"), &bin).unwrap();
+    make_exec(&bin);
+    assert_eq!(
+        call(
+            "engine.readVersion",
+            &serde_json::json!({ "path": bin.to_string_lossy() }).to_string()
+        )
+        .unwrap(),
+        r#"{"build":11429}"#
+    );
+
+    // decompress: success + classified failure.
+    let unzstd = root.join("unzstd");
+    let unzstd_bad = root.join("unzstd-bad");
+    std::fs::copy(script("fake-unzstd"), &unzstd).unwrap();
+    std::fs::copy(script("fake-unzstd-fail"), &unzstd_bad).unwrap();
+    make_exec(&unzstd);
+    make_exec(&unzstd_bad);
+    let zst = root.join("llama-app.zst");
+    std::fs::write(&zst, "payload").unwrap();
+    let dest = root.join("out/llama");
+    let out = call(
+        "engine.decompress",
+        &serde_json::json!({
+            "unzstd": unzstd.to_string_lossy(),
+            "zst": zst.to_string_lossy(),
+            "dest": dest.to_string_lossy(),
+        })
+        .to_string(),
+    )
+    .unwrap();
+    assert_eq!(out, r#"{"ok":true}"#);
+    assert_eq!(std::fs::read(&dest).unwrap(), b"payload");
+    let dest_bad = root.join("out2/llama");
+    let out: serde_json::Value = serde_json::from_str(
+        &call(
+            "engine.decompress",
+            &serde_json::json!({
+                "unzstd": unzstd_bad.to_string_lossy(),
+                "zst": zst.to_string_lossy(),
+                "dest": dest_bad.to_string_lossy(),
+            })
+            .to_string(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(out["error"], "decompressFailed");
+    assert!(!dest_bad.exists());
+
+    // ensurePathSymlink: fresh link + leave a real file alone.
+    let live = root.join("live/llama");
+    std::fs::create_dir_all(live.parent().unwrap()).unwrap();
+    std::fs::write(&live, "x").unwrap();
+    assert_eq!(
+        call(
+            "engine.ensurePathSymlink",
+            &serde_json::json!({ "home": home, "llamaPath": live.to_string_lossy() }).to_string()
+        )
+        .unwrap(),
+        r#"{"outcome":"linked"}"#
+    );
+    let link_path = root.join("home/.local/bin/llama");
+    std::fs::remove_file(&link_path).unwrap();
+    std::fs::write(&link_path, "user-file").unwrap();
+    assert_eq!(
+        call(
+            "engine.ensurePathSymlink",
+            &serde_json::json!({ "home": home, "llamaPath": live.to_string_lossy() }).to_string()
+        )
+        .unwrap(),
+        r#"{"outcome":"leftExisting"}"#
+    );
+    std::fs::remove_file(&link_path).unwrap();
+
+    // promoteStaged: promoted when the staged binary matches target.
+    let staged = root.join("staged/llama");
+    std::fs::create_dir_all(staged.parent().unwrap()).unwrap();
+    std::fs::copy(script("fake-llama-ok"), &staged).unwrap();
+    make_exec(&staged);
+    let live2 = root.join("live2/llama");
+    assert_eq!(
+        call(
+            "engine.promoteStaged",
+            &serde_json::json!({
+                "staged": staged.to_string_lossy(),
+                "live": live2.to_string_lossy(),
+                "targetBuild": 11429,
+                "home": home,
+            })
+            .to_string()
+        )
+        .unwrap(),
+        r#"{"outcome":"promoted"}"#
+    );
+    assert_eq!(
+        std::fs::metadata(&live2).unwrap().permissions().mode() & 0o111,
+        0o111
+    );
+
+    // fit / parseFitp / memCache round-trips.
+    assert_eq!(
+        call(
+            "engine.fit",
+            r#"{"loMib":2000,"hiMib":5000,"ctxLo":4096,"ctxHi":131072}"#
+        )
+        .unwrap(),
+        r#"{"profile":{"ctxBytesPer1kTokens":24774193,"residentBytes":1995676903,"schemaVersion":2}}"#
+    );
+    assert_eq!(
+        call(
+            "engine.fit",
+            r#"{"loMib":3000,"hiMib":2000,"ctxLo":4096,"ctxHi":131072}"#
+        )
+        .unwrap(),
+        "null"
+    );
+    assert_eq!(
+        call("engine.parseFitp", r#"{"output":"MTL0 217 145 0"}"#).unwrap(),
+        r#"{"sum":362}"#
+    );
+    assert_eq!(
+        call(
+            "engine.memCacheFileName",
+            r#"{"modelId":"unsloth/Tiny-GGUF:Q4_K_M"}"#
+        )
+        .unwrap(),
+        r#"{"hash":"26fce773f312d183395cda0d5faa7fd8"}"#
+    );
+    let cache_dir = root.join("Caches").to_string_lossy().into_owned();
+    let get = call(
+        "engine.memCacheGet",
+        &serde_json::json!({ "cacheDir": cache_dir, "modelId": "org/Model:Q4_0" }).to_string(),
+    )
+    .unwrap();
+    assert!(get.contains(r#""profile":null"#));
+    let set = call(
+        "engine.memCacheSet",
+        &serde_json::json!({
+            "cacheDir": cache_dir,
+            "modelId": "org/Model:Q4_0",
+            "ctxBytesPer1kTokens": 62000,
+            "residentBytes": 505413632,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    assert_eq!(set, r#"{"ok":true}"#);
+    let get = call(
+        "engine.memCacheGet",
+        &serde_json::json!({ "cacheDir": cache_dir, "modelId": "org/Model:Q4_0" }).to_string(),
+    )
+    .unwrap();
+    assert!(get.contains(r#""ctxBytesPer1kTokens":62000"#));
+    assert!(get.contains(r#""residentBytes":505413632"#));
+
+    cleanup();
+}
