@@ -115,7 +115,8 @@ struct Model: Identifiable, Codable {
   /// llama-server's own cache-scan naming; row-length concerns are handled by
   /// the display layer (`ModelIdParser`), not the id.
   static func makeId(org: String, repo: String, tag: String) -> String {
-    "\(idBase(org: org, repo: repo)):\(tag)"
+    LlamaCore.callValue("model.makeId", "id", ["org": org, "repo": repo, "tag": tag])
+      ?? "\(idBase(org: org, repo: repo)):\(tag)"
   }
 
   /// `makeId` for a combined `{org}/{repo}` string, as deeplinks carry it.
@@ -143,8 +144,7 @@ struct Model: Identifiable, Codable {
   /// rendering, not a second name, so every surface still derives from the
   /// one id string.
   var idBase: String {
-    guard let colonIdx = id.lastIndex(of: ":") else { return id }
-    return String(id[..<colonIdx])
+    LlamaCore.callValue("model.idBaseOf", "base", ["id": id]) ?? id
   }
 
   /// Display name — the id base. Kept as a semantic alias so call sites read
@@ -209,11 +209,7 @@ struct Model: Identifiable, Codable {
   /// alphabetical. Default-org models key on the bare name, matching their
   /// bare rendering.
   private var sortKey: String {
-    let parsed = ModelIdParser.parse(id)
-    if let org = parsed.displayOrg {
-      return "\(org)/\(parsed.name)"
-    }
-    return parsed.name
+    LlamaCore.callValue("model.sortKey", "key", ["id": id]) ?? id
   }
 
   /// Sort order — by displayed name, then by id for stability. Parameter
@@ -224,8 +220,12 @@ struct Model: Identifiable, Codable {
     // (e.g. "gemma-4", "embeddinggemma") sort alongside their capitalized
     // siblings rather than clustering at the end of the list. Ties (same
     // key ignoring case) fall back to the id for a stable order.
-    let keyOrder = lhs.sortKey.caseInsensitiveCompare(rhs.sortKey)
-    if keyOrder != .orderedSame { return keyOrder == .orderedAscending }
-    return lhs.id < rhs.id
+    // The core returns a three-way ordering (-1/0/1); "less" means lhs sorts
+    // first.
+    guard
+      let order: Int = LlamaCore.callValue(
+        "model.displayOrder", "order", ["lhsId": lhs.id, "rhsId": rhs.id])
+    else { return lhs.id < rhs.id }
+    return order < 0
   }
 }

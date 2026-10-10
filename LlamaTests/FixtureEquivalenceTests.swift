@@ -10,10 +10,7 @@ final class FixtureEquivalenceTests: XCTestCase {
 
   // MARK: - Fixture loading
 
-  private static let fixturesDir = URL(fileURLWithPath: #filePath)
-    .deletingLastPathComponent()  // LlamaTests/
-    .deletingLastPathComponent()  // repo root
-    .appendingPathComponent("Fixtures")
+  private static let fixturesDir = Fixtures.directory
 
   private func load<T: Decodable>(_ name: String, as type: T.Type) throws -> T {
     let url = Self.fixturesDir.appendingPathComponent(name)

@@ -27,10 +27,7 @@ final class LlamaCoreBridgeTests: XCTestCase {
   }
 
   func testCoreAgreesWithSwiftOnCorpus() throws {
-    let url = URL(fileURLWithPath: #filePath)
-      .deletingLastPathComponent()
-      .deletingLastPathComponent()
-      .appendingPathComponent("Fixtures/llama_version.json")
+    let url = Fixtures.directory.appendingPathComponent("llama_version.json")
     struct Fixture: Decodable {
       struct Case: Decodable {
         let input: String

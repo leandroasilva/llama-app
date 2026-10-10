@@ -17,10 +17,7 @@ final class Phase3FixtureTests: XCTestCase {
 
   // MARK: - Fixture loading
 
-  private static let fixturesDir = URL(fileURLWithPath: #filePath)
-    .deletingLastPathComponent()
-    .deletingLastPathComponent()
-    .appendingPathComponent("Fixtures")
+  private static let fixturesDir = Fixtures.directory
 
   private func loadJSON(_ name: String) throws -> [String: Any] {
     let url = Self.fixturesDir.appendingPathComponent(name)

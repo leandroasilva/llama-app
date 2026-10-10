@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		154EE9712EA64E200083FDEE /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 154EE9702EA64E200083FDEE /* Sentry */; };
 		156891D32E268C5F00F71BD4 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 156891D22E268C5F00F71BD4 /* Sparkle */; };
+		2A0000000000000000000011 /* Fixtures in Resources */ = {isa = PBXBuildFile; fileRef = 2A0000000000000000000010 /* Fixtures */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -24,6 +25,7 @@
 /* Begin PBXFileReference section */
 		1568919C2E2685F700F71BD4 /* Llama.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Llama.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		2A0000000000000000000002 /* LlamaTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LlamaTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		2A0000000000000000000010 /* Fixtures */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Fixtures; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -77,6 +79,7 @@
 			children = (
 				1568919E2E2685F700F71BD4 /* Llama */,
 				2A0000000000000000000003 /* LlamaTests */,
+				2A0000000000000000000010 /* Fixtures */,
 				1568919D2E2685F700F71BD4 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -194,6 +197,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2A0000000000000000000011 /* Fixtures in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -11,10 +11,7 @@ final class Phase2FixtureTests: XCTestCase {
 
   // MARK: - Fixture loading
 
-  private static let fixturesDir = URL(fileURLWithPath: #filePath)
-    .deletingLastPathComponent()
-    .deletingLastPathComponent()
-    .appendingPathComponent("Fixtures")
+  private static let fixturesDir = Fixtures.directory
 
   private var cacheDir: URL {
     Self.fixturesDir.appendingPathComponent("hf_cache/cache")

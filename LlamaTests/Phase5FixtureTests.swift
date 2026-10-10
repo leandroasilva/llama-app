@@ -17,10 +17,7 @@ final class Phase5FixtureTests: XCTestCase {
 
   // MARK: - Fixture loading + FFI helpers
 
-  private static let fixturesDir = URL(fileURLWithPath: #filePath)
-    .deletingLastPathComponent()
-    .deletingLastPathComponent()
-    .appendingPathComponent("Fixtures")
+  private static let fixturesDir = Fixtures.directory
 
   private func loadJSON(_ name: String) throws -> [String: Any] {
     let url = Self.fixturesDir.appendingPathComponent(name)

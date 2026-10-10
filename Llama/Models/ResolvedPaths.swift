@@ -44,19 +44,24 @@ struct ResolvedPaths {
 
   /// The kind of `draftSidecarFile`, read from its filename prefix.
   var draftSidecarKind: DraftHead? {
-    draftSidecarFile.flatMap { DraftHead(sidecarPath: $0) }
+    var args: [String: Any] = [:]
+    if let draftSidecarFile { args["draftSidecarFile"] = draftSidecarFile }
+    guard let raw = LlamaCore.callJSON("resolvedPaths.draftSidecarKind", args)?["kind"]
+      as? String
+    else { return nil }
+    return DraftHead(rawValue: raw)
   }
 
   /// All file paths this model occupies on disk
   var allPaths: [String] {
-    var paths = [modelFile]
-    paths.append(contentsOf: additionalParts)
-    if let mmproj = mmprojFile {
-      paths.append(mmproj)
-    }
-    if let draft = draftSidecarFile {
-      paths.append(draft)
-    }
-    return paths
+    var args: [String: Any] = [
+      "modelFile": modelFile,
+      "additionalParts": additionalParts,
+      "usesMTP": usesMTP,
+      "hfRepoDirName": hfRepoDirName,
+    ]
+    if let mmprojFile { args["mmprojFile"] = mmprojFile }
+    if let draftSidecarFile { args["draftSidecarFile"] = draftSidecarFile }
+    return LlamaCore.callJSON("resolvedPaths.allPaths", args)?["paths"] as? [String] ?? [modelFile]
   }
 }

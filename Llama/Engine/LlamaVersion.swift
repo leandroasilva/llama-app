@@ -3,6 +3,9 @@ import Foundation
 /// A llama.cpp build version. Comparison is by build number -- the monotonic
 /// `bXXXX` counter llama.cpp bumps each release; commit shas and semantic
 /// versions are ignored.
+///
+/// The parse lives in the Rust core (`version.parse`); this type is a thin
+/// view so call sites keep working unchanged.
 struct LlamaVersion: Comparable, CustomStringConvertible {
   /// The build number, e.g. `9370` for `b9370`.
   let build: Int
@@ -15,26 +18,8 @@ struct LlamaVersion: Comparable, CustomStringConvertible {
   ///   the parenthetical, so the leading token is no longer the version
   /// Returns nil if no build number can be read.
   init?(parsing output: String) {
-    // Newer format: take the number after `(build `. Checked first because the
-    // leading token (`version:`) would otherwise fail the older-format parse.
-    if let range = output.range(of: "(build ") {
-      guard let build = Int(output[range.upperBound...].prefix(while: { $0.isNumber })) else {
-        return nil
-      }
-      self.build = build
-      return
-    }
-
-    // Older format (and pinned tags): an optional leading `b`, the build digits,
-    // then optionally `-<sha>`.
-    guard let token = output.split(whereSeparator: { $0.isWhitespace }).first else {
-      return nil
-    }
-    var digits = Substring(token)
-    if let first = digits.first, first == "b" || first == "B" {
-      digits = digits.dropFirst()
-    }
-    guard let build = Int(digits.prefix(while: { $0.isNumber })) else { return nil }
+    guard let build: Int = LlamaCore.callValue("version.parse", "build", ["output": output])
+    else { return nil }
     self.build = build
   }
 

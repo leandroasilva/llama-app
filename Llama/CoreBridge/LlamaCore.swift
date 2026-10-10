@@ -20,4 +20,46 @@ enum LlamaCore {
     }
     return result
   }
+
+  /// Encodes a Swift dictionary as the JSON `args` object for `call`.
+  static func encode(_ args: [String: Any]) -> String {
+    guard
+      let data = try? JSONSerialization.data(withJSONObject: args),
+      let json = String(data: data, encoding: .utf8)
+    else { return "{}" }
+    return json
+  }
+
+  /// Dispatches `method` and decodes an object response. Returns `nil` when the
+  /// core returned NULL or a non-object payload.
+  static func callJSON(_ method: String, _ args: [String: Any] = [:]) -> [String: Any]? {
+    guard let raw = call(method, encode(args)), let data = raw.data(using: .utf8) else {
+      return nil
+    }
+    return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+  }
+
+  /// Dispatches `method` and decodes an array response (e.g. `contextTier.list`).
+  static func callJSONArray(_ method: String, _ args: [String: Any] = [:]) -> [Any]? {
+    guard let raw = call(method, encode(args)), let data = raw.data(using: .utf8) else {
+      return nil
+    }
+    return (try? JSONSerialization.jsonObject(with: data)) as? [Any]
+  }
+
+  /// Convenience for methods that return a single top-level value under `key`.
+  static func callValue<T>(_ method: String, _ key: String, _ args: [String: Any] = [:]) -> T? {
+    callJSON(method, args)?[key] as? T
+  }
+
+  /// Dispatches `method` and decodes a top-level JSON scalar (string, number,
+  /// bool, or null) — methods like `repo.parseQuant` whose whole response is a
+  /// bare value rather than an object.
+  static func callScalar<T>(_ method: String, _ args: [String: Any] = [:]) -> T? {
+    guard let raw = call(method, encode(args)), let data = raw.data(using: .utf8) else {
+      return nil
+    }
+    return (try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])) as? T
+  }
 }
+
