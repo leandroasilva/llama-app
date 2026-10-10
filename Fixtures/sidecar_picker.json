@@ -1,0 +1,72 @@
+{
+  "isMmproj": [
+    { "path": "mmproj-model-f16.gguf", "value": true },
+    { "path": "Q4_K_M/mmproj-Q8_0.gguf", "value": true },
+    { "path": "PaddleOCR-VL-1.6-GGUF-mmproj.gguf", "value": true },
+    { "path": "model.gguf", "value": false },
+    { "path": "mmproj.txt", "value": false },
+    { "path": "MMPROJ-f16.GGUF", "value": true }
+  ],
+  "isDraftHead": [
+    { "path": "mtp-Q4_K_M.gguf", "value": true },
+    { "path": "dflash-Q8_0.gguf", "value": true },
+    { "path": "eagle3-x.gguf", "value": true },
+    { "path": "dspark-x.gguf", "value": true },
+    { "path": "model.gguf", "value": false },
+    { "path": "mtp-x.txt", "value": false },
+    { "path": "MTP-x.gguf", "value": true }
+  ],
+  "mmproj": [
+    {
+      "names": ["mmproj-Q8_0.gguf", "mmproj-BF16.gguf"],
+      "mainPath": "Qwen3-8B-Q4_K_M.gguf",
+      "expected": "mmproj-Q8_0.gguf"
+    },
+    {
+      "names": ["Q4_K_M/mmproj-BF16.gguf", "Q4_K_M/mmproj-Q8_0.gguf", "mmproj-Q8_0.gguf"],
+      "mainPath": "Q4_K_M/model-Q4_K_M.gguf",
+      "expected": "Q4_K_M/mmproj-Q8_0.gguf"
+    },
+    {
+      "names": ["Q8_0/mmproj-Q8_0.gguf"],
+      "mainPath": "Q4_K_M/model.gguf",
+      "expected": null
+    },
+    {
+      "names": ["mmproj-Q8_0.gguf"],
+      "mainPath": "Q4_K_M/model.gguf",
+      "expected": "mmproj-Q8_0.gguf"
+    },
+    {
+      "names": ["model.gguf"],
+      "mainPath": "model.gguf",
+      "expected": null
+    }
+  ],
+  "draftHead": [
+    {
+      "names": ["mtp-Q8_0.gguf", "dflash-Q8_0.gguf"],
+      "mainPath": "model-Q8_0.gguf",
+      "tag": "Q8_0",
+      "expected": "dflash-Q8_0.gguf"
+    },
+    {
+      "names": ["mtp-Q4_K_M.gguf"],
+      "mainPath": "model-Q8_0.gguf",
+      "tag": "Q8_0",
+      "expected": "mtp-Q4_K_M.gguf"
+    },
+    {
+      "names": ["mtp-Q4_K_M.gguf", "mtp-Q8_0.gguf"],
+      "mainPath": "model-Q8_0.gguf",
+      "tag": "Q8_0",
+      "expected": "mtp-Q8_0.gguf"
+    },
+    {
+      "names": ["mtp-Q8_0.gguf", "dflash-Q4_K_M.gguf"],
+      "mainPath": "model-Q8_0.gguf",
+      "tag": "Q8_0",
+      "expected": "dflash-Q4_K_M.gguf"
+    }
+  ]
+}

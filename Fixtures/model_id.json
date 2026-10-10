@@ -1,0 +1,100 @@
+{
+  "parse": [
+    {
+      "id": "unsloth/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M:Q4_K_M",
+      "org": "unsloth",
+      "displayOrg": "unsloth",
+      "name": "Qwen3-Coder",
+      "params": "30B-A3B",
+      "quant": "Q4_K_M",
+      "tags": ["Instruct", "Q4_K_M"]
+    },
+    {
+      "id": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M",
+      "org": "ggml-org",
+      "displayOrg": null,
+      "name": "gemma-3",
+      "params": "4B",
+      "quant": "Q4_K_M",
+      "tags": ["it"]
+    },
+    {
+      "id": "Qwen3-8B-Q4_K_M:Q4_K_M",
+      "org": null,
+      "displayOrg": null,
+      "name": "Qwen3",
+      "params": "8B",
+      "quant": "Q4_K_M",
+      "tags": ["Q4_K_M"]
+    },
+    {
+      "id": "unsloth/DeepSeek-V4-Flash-UD-Q2_K_XL",
+      "org": "unsloth",
+      "displayOrg": "unsloth",
+      "name": "DeepSeek-V4-Flash-UD-Q2_K_XL",
+      "params": null,
+      "quant": null,
+      "tags": []
+    },
+    {
+      "id": "ggml-org/GLM-4.7-Flash-GGUF:Q8_0",
+      "org": "ggml-org",
+      "displayOrg": null,
+      "name": "GLM-4.7-Flash",
+      "params": null,
+      "quant": "Q8_0",
+      "tags": []
+    },
+    {
+      "id": "some/Model-7B-Q4_K_M:unknown",
+      "org": "some",
+      "displayOrg": "some",
+      "name": "Model",
+      "params": "7B",
+      "quant": null,
+      "tags": ["Q4_K_M"]
+    }
+  ],
+  "displayKey": [
+    { "id": "unsloth/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M:Q4_K_M", "key": "unsloth|Qwen3-Coder|30B-A3B|Q4_K_M" },
+    { "id": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M", "key": "|gemma-3|4B|Q4_K_M" },
+    { "id": "Qwen3-8B-Q4_K_M:Q4_K_M", "key": "|Qwen3|8B|Q4_K_M" },
+    { "id": "unsloth/DeepSeek-V4-Flash-UD-Q2_K_XL", "key": "unsloth|DeepSeek-V4-Flash-UD-Q2_K_XL||" },
+    { "id": "ggml-org/GLM-4.7-Flash-GGUF:Q8_0", "key": "|GLM-4.7-Flash||Q8_0" },
+    { "id": "some/Model-7B-Q4_K_M:unknown", "key": "some|Model|7B|" }
+  ],
+  "plainName": [
+    { "id": "unsloth/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M:Q4_K_M", "showTags": false, "expected": "unsloth/Qwen3-Coder 30B-A3B Q4_K_M" },
+    { "id": "unsloth/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M:Q4_K_M", "showTags": true, "expected": "unsloth/Qwen3-Coder 30B-A3B Instruct Q4_K_M Q4_K_M" },
+    { "id": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M", "showTags": false, "expected": "gemma-3 4B Q4_K_M" },
+    { "id": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M", "showTags": true, "expected": "gemma-3 4B it Q4_K_M" },
+    { "id": "unsloth/DeepSeek-V4-Flash-UD-Q2_K_XL", "showTags": false, "expected": "unsloth/DeepSeek-V4-Flash-UD-Q2_K_XL" },
+    { "id": "unsloth/DeepSeek-V4-Flash-UD-Q2_K_XL", "showTags": true, "expected": "unsloth/DeepSeek-V4-Flash-UD-Q2_K_XL" },
+    { "id": "some/Model-7B-Q4_K_M:unknown", "showTags": false, "expected": "some/Model 7B" },
+    { "id": "some/Model-7B-Q4_K_M:unknown", "showTags": true, "expected": "some/Model 7B Q4_K_M" }
+  ],
+  "makeId": [
+    {
+      "org": "unsloth",
+      "repo": "Qwen3-Coder-30B-A3B-Instruct-GGUF",
+      "tag": "Q4_K_M",
+      "id": "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_M"
+    }
+  ],
+  "idBaseOf": [
+    { "id": "unsloth/GLM-4.7-Flash-GGUF:Q8_0", "base": "unsloth/GLM-4.7-Flash-GGUF" },
+    { "id": "noColon", "base": "noColon" }
+  ],
+  "sortKey": [
+    { "id": "unsloth/Qwen3-Coder-30B-A3B-Instruct-Q4_K_M:Q4_K_M", "key": "unsloth/Qwen3-Coder" },
+    { "id": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M", "key": "gemma-3" },
+    { "id": "ggml-org/GLM-4.7-Flash-GGUF:Q8_0", "key": "GLM-4.7-Flash" },
+    { "id": "Qwen3-8B-Q4_K_M:Q4_K_M", "key": "Qwen3" }
+  ],
+  "displayOrder": [
+    { "lhsId": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M", "rhsId": "ggml-org/Beta-x:Q4_K_M", "order": 1 },
+    { "lhsId": "ggml-org/Beta-x:Q4_K_M", "rhsId": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M", "order": -1 },
+    { "lhsId": "ggml-org/model-8B-Q4_K_M:Q4_K_M", "rhsId": "model-8B-Q4_K_M:Q8_0", "order": -1 },
+    { "lhsId": "a:Q4_K_M", "rhsId": "a:Q4_K_M", "order": 0 }
+  ]
+}

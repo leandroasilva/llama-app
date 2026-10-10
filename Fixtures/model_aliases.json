@@ -1,0 +1,45 @@
+{
+  "validationCases": [
+    { "name": "", "aliases": [], "replacing": null, "overrideNames": [], "error": "Enter a name." },
+    { "name": "Code", "aliases": [], "replacing": null, "overrideNames": [], "error": "Use lowercase letters, digits, dots, dashes, or underscores." },
+    { "name": "co de", "aliases": [], "replacing": null, "overrideNames": [], "error": "Use lowercase letters, digits, dots, dashes, or underscores." },
+    { "name": "co/de", "aliases": [], "replacing": null, "overrideNames": [], "error": "Use lowercase letters, digits, dots, dashes, or underscores." },
+    { "name": "code", "aliases": [{ "name": "code", "modelId": "m1" }], "replacing": null, "overrideNames": [], "error": "There's already an alias named code." },
+    { "name": "code", "aliases": [{ "name": "code", "modelId": "m1" }], "replacing": { "name": "code", "modelId": "m1" }, "overrideNames": [], "error": null },
+    { "name": "code", "aliases": [], "replacing": null, "overrideNames": ["code"], "error": "models.user.ini defines a model named code." },
+    { "name": "code", "aliases": [], "replacing": null, "overrideNames": [], "error": null }
+  ],
+  "removeConflictsCases": [
+    {
+      "sections": [
+        { "name": "modelA", "pairs": [{ "key": "alias", "value": "a,b" }, { "key": "other", "value": "x" }] },
+        { "name": "modelB", "pairs": [{ "key": "alias", "value": "b,c" }] },
+        { "name": "custom", "pairs": [{ "key": "alias", "value": "a" }] },
+        { "name": "modelX", "pairs": [{ "key": "alias", "value": "custom" }] }
+      ],
+      "expected": [
+        { "name": "modelA", "pairs": [{ "key": "alias", "value": "a,b" }, { "key": "other", "value": "x" }] },
+        { "name": "modelB", "pairs": [{ "key": "alias", "value": "c" }] },
+        { "name": "custom", "pairs": [] },
+        { "name": "modelX", "pairs": [] }
+      ]
+    }
+  ],
+  "setAliasCases": [
+    {
+      "section": { "name": "M", "pairs": [] },
+      "names": ["a", "b"],
+      "expected": { "name": "M", "pairs": [{ "key": "alias", "value": "a,b" }] }
+    },
+    {
+      "section": { "name": "M", "pairs": [] },
+      "names": [],
+      "expected": { "name": "M", "pairs": [] }
+    },
+    {
+      "section": { "name": "M", "pairs": [{ "key": "temp", "value": "0.7" }] },
+      "names": ["x"],
+      "expected": { "name": "M", "pairs": [{ "key": "temp", "value": "0.7" }, { "key": "alias", "value": "x" }] }
+    }
+  ]
+}

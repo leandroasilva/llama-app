@@ -48,7 +48,9 @@ impl ContextTier {
     }
 
     pub fn from_raw(value: i64) -> Option<ContextTier> {
-        ContextTier::ALL.into_iter().find(|t| t.raw_value() == value)
+        ContextTier::ALL
+            .into_iter()
+            .find(|t| t.raw_value() == value)
     }
 
     /// Number-only label without the `ctx` suffix (e.g. `"4k"`).

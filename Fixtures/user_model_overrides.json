@@ -1,0 +1,64 @@
+{
+  "parseCases": [
+    {
+      "text": "; header comment\norphan = ignored\n  [ spaced ]  \n[ggml-org/gemma-4-E4B-it-GGUF:Q8_0]\ntemp = 0.7\ntop-p = 0.8\ntemp = 0.9\n\n[unsloth/DeepSeek-V4-Flash-0731-GGUF:UD-Q2_K_XL]\nmodel = /path/to/x.gguf\nchat-template-kwargs = {\"a\": 1}\nkey-only =\n",
+      "sections": [
+        { "name": "spaced", "pairs": [] },
+        {
+          "name": "ggml-org/gemma-4-E4B-it-GGUF:Q8_0",
+          "pairs": [
+            { "key": "temp", "value": "0.9" },
+            { "key": "top-p", "value": "0.8" }
+          ]
+        },
+        {
+          "name": "unsloth/DeepSeek-V4-Flash-0731-GGUF:UD-Q2_K_XL",
+          "pairs": [
+            { "key": "model", "value": "/path/to/x.gguf" },
+            { "key": "chat-template-kwargs", "value": "{\"a\": 1}" },
+            { "key": "key-only", "value": "" }
+          ]
+        }
+      ]
+    }
+  ],
+  "serializeCases": [
+    {
+      "sections": [
+        { "name": "A", "pairs": [{ "key": "k", "value": "v" }] },
+        { "name": "B", "pairs": [] }
+      ],
+      "text": "[A]\nk = v\n\n[B]\n\n"
+    }
+  ],
+  "applyCases": [
+    {
+      "generated": [
+        { "name": "A", "pairs": [{ "key": "model", "value": "/x.gguf" }, { "key": "ctx-size", "value": "4096" }] },
+        { "name": "B", "pairs": [{ "key": "model", "value": "/y.gguf" }] }
+      ],
+      "overrides": [
+        { "name": "A", "pairs": [{ "key": "temp", "value": "0.7" }] },
+        { "name": "C", "pairs": [{ "key": "model", "value": "/z.gguf" }] }
+      ],
+      "suspended": false,
+      "expected": [
+        { "name": "A", "pairs": [{ "key": "model", "value": "/x.gguf" }, { "key": "ctx-size", "value": "4096" }, { "key": "temp", "value": "0.7" }] },
+        { "name": "B", "pairs": [{ "key": "model", "value": "/y.gguf" }] },
+        { "name": "C", "pairs": [{ "key": "model", "value": "/z.gguf" }] }
+      ]
+    },
+    {
+      "generated": [
+        { "name": "A", "pairs": [{ "key": "model", "value": "/x.gguf" }] }
+      ],
+      "overrides": [
+        { "name": "A", "pairs": [{ "key": "temp", "value": "0.7" }] }
+      ],
+      "suspended": true,
+      "expected": [
+        { "name": "A", "pairs": [{ "key": "model", "value": "/x.gguf" }] }
+      ]
+    }
+  ]
+}

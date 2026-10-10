@@ -99,6 +99,7 @@ pub fn parse(id: &str) -> Parsed {
 
     let segments: Vec<String> = rest
         .split('-')
+        .filter(|s| !s.is_empty())
         .filter(|s| !is_ignored(s))
         .map(|s| s.to_string())
         .collect();

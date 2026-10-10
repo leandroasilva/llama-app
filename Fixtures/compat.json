@@ -1,0 +1,53 @@
+{
+  "deviceBudget": [
+    { "workingSetMb": 24576, "physicalMb": 32768, "useFullWorkingSet": false, "mb": 23552 },
+    { "workingSetMb": 24576, "physicalMb": 32768, "useFullWorkingSet": true, "mb": 24576 },
+    { "workingSetMb": 5461, "physicalMb": 8192, "useFullWorkingSet": false, "mb": 4096 },
+    { "workingSetMb": 20000, "physicalMb": 8192, "useFullWorkingSet": false, "mb": 4096 }
+  ],
+  "fitTarget": [
+    { "workingSetMb": 24576, "budgetMb": 23552, "mb": 1024 },
+    { "workingSetMb": 20000, "budgetMb": 4096, "mb": 15904 },
+    { "workingSetMb": 4096, "budgetMb": 5000, "mb": 0 }
+  ],
+  "estimatedWeightFits": [
+    { "bytes": 10737418240, "budgetMb": 23552, "value": true },
+    { "bytes": 10737418240, "budgetMb": 10000, "value": false },
+    { "bytes": null, "budgetMb": 0, "value": true },
+    { "bytes": 0, "budgetMb": 0, "value": true }
+  ],
+  "info": [
+    { "ctxWindow": 131072, "fileSize": 4294967296, "ctxBytesPer1kTokens": 0, "residentBytes": 0, "ctxWindowTokens": 4096, "budgetMb": 23552, "isCompatible": true, "incompatibilitySummary": null },
+    { "ctxWindow": 2048, "fileSize": 4294967296, "ctxBytesPer1kTokens": 0, "residentBytes": 0, "ctxWindowTokens": 4096, "budgetMb": 23552, "isCompatible": false, "incompatibilitySummary": "requires models with ≥4k context" },
+    { "ctxWindow": 8192, "fileSize": 4294967296, "ctxBytesPer1kTokens": 0, "residentBytes": 0, "ctxWindowTokens": 32768, "budgetMb": 23552, "isCompatible": false, "incompatibilitySummary": "model max is 8k ctx" },
+    { "ctxWindow": 131072, "fileSize": 51539607552, "ctxBytesPer1kTokens": 100000000, "residentBytes": 0, "ctxWindowTokens": 4096, "budgetMb": 0, "isCompatible": false, "incompatibilitySummary": "Requires a Mac with 96 GB+ of memory" },
+    { "ctxWindow": 131072, "fileSize": 34359738368, "ctxBytesPer1kTokens": 0, "residentBytes": 0, "ctxWindowTokens": 4096, "budgetMb": 23552, "isCompatible": false, "incompatibilitySummary": "Requires a Mac with 48 GB+ of memory" }
+  ],
+  "runtimeMemoryMb": [
+    { "ctxWindow": 131072, "fileSize": 4294967296, "ctxBytesPer1kTokens": 0, "residentBytes": 0, "ctxWindowTokens": 4096, "mb": 4301 },
+    { "ctxWindow": 131072, "fileSize": 4294967296, "ctxBytesPer1kTokens": 50000000, "residentBytes": 2147483648, "ctxWindowTokens": 4096, "mb": 2244 }
+  ],
+  "supportedTiers": [
+    { "ctxWindow": 131072, "fileSize": 4294967296, "ctxBytesPer1kTokens": 0, "residentBytes": 0, "budgetMb": 23552, "tiers": [4096] },
+    { "ctxWindow": 131072, "fileSize": 4294967296, "ctxBytesPer1kTokens": 50000000, "residentBytes": 0, "budgetMb": 8192, "tiers": [4096, 8192, 16384, 32768, 65536] }
+  ],
+  "displayTiers": [
+    { "ctxWindow": 32768, "ctxBytesPer1kTokens": 123, "tiers": [4096, 8192, 16384, 32768] },
+    { "ctxWindow": 131072, "ctxBytesPer1kTokens": 123, "tiers": [4096, 8192, 16384, 32768, 65536, 131072] },
+    { "ctxWindow": 262144, "ctxBytesPer1kTokens": 123, "tiers": [4096, 8192, 16384, 32768, 65536, 131072, 262144] },
+    { "ctxWindow": 131072, "ctxBytesPer1kTokens": 0, "tiers": [4096] }
+  ],
+  "nativeMaxTier": [
+    { "ctxWindow": 4096, "tier": 4096 },
+    { "ctxWindow": 32768, "tier": 32768 },
+    { "ctxWindow": 100000, "tier": 65536 },
+    { "ctxWindow": 131072, "tier": 131072 },
+    { "ctxWindow": 262144, "tier": 262144 },
+    { "ctxWindow": 2000, "tier": null }
+  ],
+  "effectiveTier": [
+    { "ctxWindow": 131072, "fileSize": 4294967296, "ctxBytesPer1kTokens": 50000000, "residentBytes": 0, "budgetMb": 8192, "selected": 131072, "tier": 4096 },
+    { "ctxWindow": 131072, "fileSize": 4294967296, "ctxBytesPer1kTokens": 50000000, "residentBytes": 0, "budgetMb": 8192, "selected": 32768, "tier": 32768 },
+    { "ctxWindow": 131072, "fileSize": 4294967296, "ctxBytesPer1kTokens": 50000000, "residentBytes": 0, "budgetMb": 8192, "selected": null, "tier": 4096 }
+  ]
+}

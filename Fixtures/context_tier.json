@@ -1,0 +1,11 @@
+{
+  "tiers": [
+    { "rawValue": 4096, "shortLabel": "4k", "label": "4k ctx", "suffix": ":4k ctx" },
+    { "rawValue": 8192, "shortLabel": "8k", "label": "8k ctx", "suffix": ":8k ctx" },
+    { "rawValue": 16384, "shortLabel": "16k", "label": "16k ctx", "suffix": ":16k ctx" },
+    { "rawValue": 32768, "shortLabel": "32k", "label": "32k ctx", "suffix": ":32k ctx" },
+    { "rawValue": 65536, "shortLabel": "64k", "label": "64k ctx", "suffix": ":64k ctx" },
+    { "rawValue": 131072, "shortLabel": "128k", "label": "128k ctx", "suffix": ":128k ctx" },
+    { "rawValue": 262144, "shortLabel": "256k", "label": "256k ctx", "suffix": ":256k ctx" }
+  ]
+}

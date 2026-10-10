@@ -127,8 +127,9 @@ impl ModelMem {
             let required_total_mb = from_working_set.max(from_os_floor);
             let gb = (required_total_mb / 1024.0).ceil();
 
-            let common_sizes: [f64; 11] =
-                [8.0, 16.0, 18.0, 24.0, 32.0, 36.0, 48.0, 64.0, 96.0, 128.0, 192.0];
+            let common_sizes: [f64; 11] = [
+                8.0, 16.0, 18.0, 24.0, 32.0, 36.0, 48.0, 64.0, 96.0, 128.0, 192.0,
+            ];
             let display_gb = common_sizes
                 .iter()
                 .copied()

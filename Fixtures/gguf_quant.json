@@ -1,0 +1,51 @@
+{
+  "labelCases": [
+    { "path": "Qwen3-8B-Q4_K_M.gguf", "label": "Q4_K_M" },
+    { "path": "unsloth/gemma-3-4b-it-UD-Q4_K_XL.gguf", "label": "UD-Q4_K_XL" },
+    { "path": "model-00001-of-00003.gguf", "label": null },
+    { "path": "gpt-oss-20b-mxfp4.gguf", "label": "MXFP4" },
+    { "path": "Llama-3.2-1B-Instruct-Q4_0_4_4.gguf", "label": "Q4_0" },
+    { "path": "foobar.gguf", "label": null }
+  ],
+  "tagCases": [
+    { "path": "Qwen3-8B-Q4_K_M.gguf", "requested": null, "tag": "Q4_K_M" },
+    { "path": "unsloth/gemma-3-4b-it-UD-Q4_K_XL.gguf", "requested": null, "tag": "Q4_K_XL" },
+    { "path": "model-00001-of-00003.gguf", "requested": null, "tag": "unknown" },
+    { "path": "gpt-oss-20b-mxfp4.gguf", "requested": null, "tag": "MXFP4" },
+    { "path": "Qwen3-30B-A3B-Q8_0.gguf", "requested": "Q6_K", "tag": "Q8_0" },
+    { "path": "foobar.gguf", "requested": "IQ2_XS", "tag": "IQ2_XS" },
+    { "path": "Q4_K_M/some-model.gguf", "requested": null, "tag": "Q4_K_M" },
+    { "path": "foo-Q4_K_M.gguf", "requested": "Q8_0", "tag": "Q4_K_M" }
+  ],
+  "bitsPathCases": [
+    { "path": "Qwen3-8B-Q4_K_M.gguf", "bits": 4 },
+    { "path": "Qwen-Q4_K_M-00001-of-00002.gguf", "bits": 4 },
+    { "path": "model-00001-of-00003.gguf", "bits": 0 },
+    { "path": "gpt-oss-20b-mxfp4.gguf", "bits": 4 },
+    { "path": "Llama-3.2-1B-Instruct-Q4_0_4_4.gguf", "bits": 4 },
+    { "path": "foo-BF16.gguf", "bits": 16 },
+    { "path": "foo-F32.gguf", "bits": 32 },
+    { "path": "nodot-gguf", "bits": 0 },
+    { "path": "model-Q8_0.gguf", "bits": 8 }
+  ],
+  "bitsTagCases": [
+    { "tag": "BF16", "bits": 16 },
+    { "tag": "F32", "bits": 32 },
+    { "tag": "NVFP4", "bits": 4 },
+    { "tag": "Q4_K_M", "bits": 4 },
+    { "tag": "IQ2_XS", "bits": 2 },
+    { "tag": "none", "bits": 0 },
+    { "tag": "", "bits": 0 },
+    { "tag": "Q8_0", "bits": 8 },
+    { "tag": "TQ1_0", "bits": 1 }
+  ],
+  "canonicalCases": [
+    { "label": "UD-Q4_K_XL", "tag": "Q4_K_XL" },
+    { "label": "Q4_K_M", "tag": "Q4_K_M" },
+    { "label": "foo.bar", "tag": "BAR" },
+    { "label": "MTP-Q8_0", "tag": "Q8_0" },
+    { "label": "a-", "tag": "A-" },
+    { "label": "q4_k_m", "tag": "Q4_K_M" },
+    { "label": "UD-", "tag": "UD-" }
+  ]
+}

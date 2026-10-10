@@ -5,5 +5,8 @@
 //! injected through `llama-core-ffi`. See `MIGRACAO_RUST_REVIEW.md` for the
 //! migration plan and the FFI contract.
 
+pub mod config;
 pub mod engine;
 pub mod hf;
+pub mod models;
+pub mod pathutil;

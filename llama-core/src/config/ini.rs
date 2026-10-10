@@ -55,7 +55,7 @@ impl Section {
 pub fn parse(text: &str) -> Vec<Section> {
     let mut sections: Vec<Section> = Vec::new();
 
-    for raw_line in text.split(|c| c == '\n' || c == '\r') {
+    for raw_line in text.split(['\n', '\r']) {
         let line = raw_line.trim();
         if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
             continue;
@@ -97,7 +97,8 @@ pub fn apply(generated: &[Section], overrides: &[Section], suspended: bool) -> V
     }
 
     let mut merged = generated.to_vec();
-    let mut index_by_name: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut index_by_name: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     for (index, section) in merged.iter().enumerate() {
         index_by_name.insert(section.name.clone(), index);
     }

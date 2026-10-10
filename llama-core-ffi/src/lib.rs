@@ -8,8 +8,10 @@
 //!   boundary (which would be undefined behavior).
 //! - Complex payloads travel as JSON; this keeps the ABI small and stable.
 
+use llama_core::config::{aliases, ini};
 use llama_core::engine::LlamaVersion;
-use llama_core::hf::HFRepoParser;
+use llama_core::hf::{GGUFQuant, HFRepoParser, SidecarPicker};
+use llama_core::models::{model, ContextTier, DraftHead, ModelIdParser, ModelMem, ResolvedPaths};
 use serde_json::{json, Value};
 use std::ffi::{c_char, c_int, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -160,6 +162,68 @@ pub unsafe extern "C" fn llama_core_free(s: *mut c_char) {
     }));
 }
 
+fn section_from_value(v: &Value) -> ini::Section {
+    let name = v
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let mut s = ini::Section::new(name);
+    if let Some(pairs) = v.get("pairs").and_then(Value::as_array) {
+        for p in pairs {
+            let k = p.get("key").and_then(Value::as_str).unwrap_or("");
+            let val = p.get("value").and_then(Value::as_str).unwrap_or("");
+            s.set(k, val);
+        }
+    }
+    s
+}
+
+fn section_to_value(s: &ini::Section) -> Value {
+    let pairs: Vec<Value> = s
+        .pairs
+        .iter()
+        .map(|(k, v)| json!({ "key": k, "value": v }))
+        .collect();
+    json!({ "name": s.name, "pairs": pairs })
+}
+
+fn sections_from_value(v: &Value) -> Vec<ini::Section> {
+    v.as_array()
+        .map(|a| a.iter().map(section_from_value).collect())
+        .unwrap_or_default()
+}
+
+fn sections_to_value(sections: &[ini::Section]) -> Value {
+    Value::Array(sections.iter().map(section_to_value).collect())
+}
+
+fn strings_from_value(v: &Value) -> Vec<String> {
+    v.as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn tiers_to_value(tiers: &[ContextTier]) -> Value {
+    Value::Array(tiers.iter().map(|t| json!(t.raw_value())).collect())
+}
+
+fn parsed_to_value(p: &llama_core::models::Parsed) -> Value {
+    json!({
+        "org": p.org,
+        "displayOrg": p.display_org(),
+        "name": p.name,
+        "params": p.params,
+        "quant": p.quant,
+        "tags": p.tags,
+    })
+}
+
 fn dispatch(method: &str, args: &Value) -> Value {
     // Development-only escape hatch used by tests to prove that a panic is
     // caught at the boundary rather than unwinding into the host.
@@ -169,6 +233,8 @@ fn dispatch(method: &str, args: &Value) -> Value {
     }
 
     let arg_str = |key: &str| args.get(key).and_then(Value::as_str).unwrap_or("");
+    let arg_f = |key: &str| args.get(key).and_then(Value::as_f64).unwrap_or(0.0);
+    let arg_i = |key: &str| args.get(key).and_then(Value::as_i64).unwrap_or(0);
     match method {
         "ping" => json!({ "pong": true }),
 
@@ -186,6 +252,291 @@ fn dispatch(method: &str, args: &Value) -> Value {
         "repo.shardTotal" => json!(HFRepoParser::shard_total(arg_str("filename"))),
         "repo.splitShardBaseName" => {
             json!(HFRepoParser::split_shard_base_name(arg_str("filename")))
+        }
+
+        // ---- Fase 1: GGUF quant ----
+        "quant.parseLabel" => {
+            json!({ "label": GGUFQuant::parse_label(arg_str("path")) })
+        }
+        "quant.tagForPath" => {
+            let requested = args.get("requested").and_then(Value::as_str);
+            json!({ "tag": GGUFQuant::tag_for_path(arg_str("path"), requested) })
+        }
+        "quant.quantBitsForPath" => {
+            json!({ "bits": GGUFQuant::quant_bits_for_path(arg_str("path")) })
+        }
+        "quant.quantBitsForTag" => {
+            json!({ "bits": GGUFQuant::quant_bits_for_tag(arg_str("tag")) })
+        }
+        "quant.canonicalTag" => {
+            json!({ "tag": GGUFQuant::canonical_tag(arg_str("label")) })
+        }
+        "quant.matches" => {
+            json!({ "value": GGUFQuant::matches(arg_str("a"), arg_str("b")) })
+        }
+
+        // ---- Fase 1: DraftHead ----
+        "draftHead.fromSidecarPath" => {
+            json!({ "kind": DraftHead::from_sidecar_path(arg_str("path")).map(DraftHead::as_str) })
+        }
+        "draftHead.describe" => match DraftHead::from_str_name(arg_str("kind")) {
+            Some(k) => json!({
+                "prefix": k.sidecar_prefix(),
+                "specType": k.spec_type(),
+                "draftNMax": k.draft_n_max(),
+                "label": k.label(),
+            }),
+            None => Value::Null,
+        },
+        "draftHead.preferenceOrder" => {
+            json!(DraftHead::PREFERENCE_ORDER
+                .iter()
+                .map(|k| k.as_str())
+                .collect::<Vec<_>>())
+        }
+
+        // ---- Fase 1: SidecarPicker ----
+        "sidecar.isMmproj" => json!({ "value": SidecarPicker::is_mmproj(arg_str("path")) }),
+        "sidecar.isDraftHead" => json!({ "value": SidecarPicker::is_draft_head(arg_str("path")) }),
+        "sidecar.mmproj" => {
+            let names = strings_from_value(args.get("names").unwrap_or(&Value::Null));
+            json!({ "path": SidecarPicker::mmproj(&names, arg_str("mainPath")) })
+        }
+        "sidecar.draftHead" => {
+            let names = strings_from_value(args.get("names").unwrap_or(&Value::Null));
+            let tag = args.get("tag").and_then(Value::as_str);
+            json!({ "path": SidecarPicker::draft_head(&names, arg_str("mainPath"), tag) })
+        }
+
+        // ---- Fase 1: ModelIdParser ----
+        "modelId.parse" => parsed_to_value(&ModelIdParser::parse(arg_str("id"))),
+        "modelId.plainName" => {
+            let show_tags = args
+                .get("showTags")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            json!({ "name": ModelIdParser::parse(arg_str("id")).plain_name(show_tags) })
+        }
+        "modelId.displayKey" => {
+            json!({ "key": ModelIdParser::parse(arg_str("id")).display_key() })
+        }
+
+        // ---- Fase 1: Model id/sort helpers ----
+        "model.makeId" => json!({
+            "id": model::make_id(arg_str("org"), arg_str("repo"), arg_str("tag"))
+        }),
+        "model.idBaseOf" => json!({ "base": model::id_base_of(arg_str("id")) }),
+        "model.sortKey" => json!({ "key": model::sort_key(arg_str("id")) }),
+        "model.displayOrder" => {
+            let order = model::display_order(arg_str("lhsId"), arg_str("rhsId"));
+            json!({ "order": order as i32 })
+        }
+
+        // ---- Fase 1: ContextTier ----
+        "contextTier.list" => {
+            let tiers: Vec<Value> = ContextTier::ALL
+                .iter()
+                .map(|t| {
+                    json!({
+                        "rawValue": t.raw_value(),
+                        "shortLabel": t.short_label(),
+                        "label": t.label(),
+                        "suffix": t.suffix(),
+                    })
+                })
+                .collect();
+            Value::Array(tiers)
+        }
+
+        // ---- Fase 1: ResolvedPaths ----
+        "resolvedPaths.allPaths" => {
+            let rp = ResolvedPaths {
+                model_file: arg_str("modelFile").to_string(),
+                additional_parts: strings_from_value(
+                    args.get("additionalParts").unwrap_or(&Value::Null),
+                ),
+                mmproj_file: args
+                    .get("mmprojFile")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                uses_mtp: args
+                    .get("usesMTP")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                draft_sidecar_file: args
+                    .get("draftSidecarFile")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                hf_repo_dir_name: arg_str("hfRepoDirName").to_string(),
+            };
+            json!({ "paths": rp.all_paths() })
+        }
+        "resolvedPaths.draftSidecarKind" => {
+            let rp = ResolvedPaths {
+                model_file: String::new(),
+                additional_parts: vec![],
+                mmproj_file: None,
+                uses_mtp: false,
+                draft_sidecar_file: args
+                    .get("draftSidecarFile")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                hf_repo_dir_name: String::new(),
+            };
+            json!({ "kind": rp.draft_sidecar_kind().map(DraftHead::as_str) })
+        }
+
+        // ---- Fase 1: Model+Compatibility ----
+        "compat.deviceBudget" => {
+            let use_full = args
+                .get("useFullWorkingSet")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            json!({ "mb": llama_core::models::compat::device_memory_budget_mb(
+                arg_f("workingSetMb"), arg_f("physicalMb"), use_full
+            ) })
+        }
+        "compat.fitTarget" => {
+            json!({ "mb": llama_core::models::compat::fit_target_mb(arg_f("workingSetMb"), arg_f("budgetMb")) })
+        }
+        "compat.estimatedWeightFits" => {
+            let bytes = args.get("bytes").and_then(Value::as_i64);
+            json!({ "value": llama_core::models::compat::estimated_weight_fits(bytes, arg_f("budgetMb")) })
+        }
+        "compat.info" => {
+            let mem = ModelMem {
+                ctx_window: arg_i("ctxWindow"),
+                file_size: arg_i("fileSize"),
+                ctx_bytes_per_1k_tokens: arg_i("ctxBytesPer1kTokens"),
+                resident_bytes: arg_i("residentBytes"),
+            };
+            let info = mem.compatibility_info(arg_f("ctxWindowTokens"), arg_f("budgetMb"));
+            json!({
+                "isCompatible": info.is_compatible,
+                "incompatibilitySummary": info.incompatibility_summary,
+            })
+        }
+        "compat.runtimeMemoryMb" => {
+            let mem = ModelMem {
+                ctx_window: arg_i("ctxWindow"),
+                file_size: arg_i("fileSize"),
+                ctx_bytes_per_1k_tokens: arg_i("ctxBytesPer1kTokens"),
+                resident_bytes: arg_i("residentBytes"),
+            };
+            json!({ "mb": mem.runtime_memory_usage_mb(arg_f("ctxWindowTokens")) })
+        }
+        "compat.supportedTiers" => {
+            let mem = ModelMem {
+                ctx_window: arg_i("ctxWindow"),
+                file_size: arg_i("fileSize"),
+                ctx_bytes_per_1k_tokens: arg_i("ctxBytesPer1kTokens"),
+                resident_bytes: arg_i("residentBytes"),
+            };
+            json!({ "tiers": tiers_to_value(&mem.supported_context_tiers(arg_f("budgetMb"))) })
+        }
+        "compat.displayTiers" => {
+            let mem = ModelMem {
+                ctx_window: arg_i("ctxWindow"),
+                file_size: arg_i("fileSize"),
+                ctx_bytes_per_1k_tokens: arg_i("ctxBytesPer1kTokens"),
+                resident_bytes: arg_i("residentBytes"),
+            };
+            json!({ "tiers": tiers_to_value(&mem.display_context_tiers()) })
+        }
+        "compat.nativeMaxTier" => {
+            let mem = ModelMem {
+                ctx_window: arg_i("ctxWindow"),
+                file_size: 0,
+                ctx_bytes_per_1k_tokens: 0,
+                resident_bytes: 0,
+            };
+            json!({ "tier": mem.native_max_tier().map(|t| t.raw_value()) })
+        }
+        "compat.effectiveTier" => {
+            let mem = ModelMem {
+                ctx_window: arg_i("ctxWindow"),
+                file_size: arg_i("fileSize"),
+                ctx_bytes_per_1k_tokens: arg_i("ctxBytesPer1kTokens"),
+                resident_bytes: arg_i("residentBytes"),
+            };
+            let selected = args
+                .get("selected")
+                .and_then(Value::as_i64)
+                .and_then(ContextTier::from_raw);
+            json!({ "tier": mem.effective_ctx_tier(arg_f("budgetMb"), selected).map(|t| t.raw_value()) })
+        }
+
+        // ---- Fase 1: UserModelOverrides (pure INI) ----
+        "ini.parse" => {
+            let sections = ini::parse(arg_str("text"));
+            json!({ "sections": sections_to_value(&sections) })
+        }
+        "ini.serialize" => {
+            let sections = sections_from_value(args.get("sections").unwrap_or(&Value::Null));
+            let text: String = sections.iter().map(ini::Section::serialized).collect();
+            json!({ "text": text })
+        }
+        "ini.apply" => {
+            let generated = sections_from_value(args.get("generated").unwrap_or(&Value::Null));
+            let overrides = sections_from_value(args.get("overrides").unwrap_or(&Value::Null));
+            let suspended = args
+                .get("suspended")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            json!({ "sections": sections_to_value(&ini::apply(&generated, &overrides, suspended)) })
+        }
+
+        // ---- Fase 1: ModelAliases (pure) ----
+        "aliases.validationError" => {
+            let aliases: Vec<aliases::Alias> = args
+                .get("aliases")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .map(|v| aliases::Alias {
+                            name: v
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string(),
+                            model_id: v
+                                .get("modelId")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let replacing = args.get("replacing").and_then(|v| {
+                v.as_object().map(|o| aliases::Alias {
+                    name: o
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                    model_id: o
+                        .get("modelId")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
+                })
+            });
+            let override_names =
+                strings_from_value(args.get("overrideNames").unwrap_or(&Value::Null));
+            json!({ "error": aliases::validation_error(
+                arg_str("name"), &aliases, replacing.as_ref(), &override_names
+            ) })
+        }
+        "aliases.removeConflicts" => {
+            let sections = sections_from_value(args.get("sections").unwrap_or(&Value::Null));
+            json!({ "sections": sections_to_value(&aliases::remove_conflicts(&sections)) })
+        }
+        "aliases.setAlias" => {
+            let mut section = section_from_value(args.get("section").unwrap_or(&Value::Null));
+            let names = strings_from_value(args.get("names").unwrap_or(&Value::Null));
+            aliases::set_alias(&mut section, &names);
+            json!({ "section": section_to_value(&section) })
         }
 
         // Smoke test for the event channel.

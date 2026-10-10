@@ -1,0 +1,16 @@
+{
+  "fromSidecarPath": [
+    { "path": "mtp-Q4_K_M.gguf", "kind": "mtp" },
+    { "path": "dflash-Q8_0.gguf", "kind": "dflash" },
+    { "path": "eagle3-x.gguf", "kind": null },
+    { "path": "model.gguf", "kind": null },
+    { "path": "MT-MTP.gguf", "kind": null },
+    { "path": "sub/mtp-x.gguf", "kind": "mtp" },
+    { "path": "DFLASH-x.GGUF", "kind": "dflash" }
+  ],
+  "describe": [
+    { "kind": "mtp", "prefix": "mtp-", "specType": "draft-mtp", "draftNMax": 3, "label": "MTP" },
+    { "kind": "dflash", "prefix": "dflash-", "specType": "draft-dflash", "draftNMax": 7, "label": "DFlash" }
+  ],
+  "preferenceOrder": ["dflash", "mtp"]
+}
