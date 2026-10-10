@@ -1,5 +1,4 @@
 import Foundation
-import OSLog
 
 /// A stable name that API clients can send as `"model"` in place of a model
 /// id, pointed at one installed model.
@@ -20,8 +19,6 @@ struct ModelAlias: Equatable, Hashable {
 /// under the model's `aliases` in `/models`), so there's no server-side
 /// feature to build here -- only config to write.
 enum ModelAliases {
-  private static let logger = Logger(subsystem: Logging.subsystem, category: "ModelAliases")
-
   /// The preset key the router reads aliases from (`--alias`, comma-separated).
   static let presetKey = "alias"
 
@@ -30,37 +27,24 @@ enum ModelAliases {
     UserSettings.modelAliases.filter { $0.modelId == modelId }.map(\.name)
   }
 
-  /// Characters an alias may use.
-  ///
-  /// Narrow on purpose. Lowercase only, because the router matches names
-  /// case-sensitively -- allowing `Code` next to `code` would give two names
-  /// that read as one. No `/` or `:`, which every model id contains, so an
-  /// alias can never collide with a model's id. No `,`, the separator in the
-  /// preset value.
-  private static let allowedCharacters = Set("abcdefghijklmnopqrstuvwxyz0123456789._-")
-
   /// Why `name` can't be saved as an alias, or nil if it can.
+  ///
+  /// Validation (allowed characters, uniqueness, collision with a user-defined
+  /// model name) lives in the Rust core (`aliases.validationError`); the alias
+  /// store and the parsed override file are injected as inputs.
   ///
   /// - Parameter replacing: the alias being edited, whose own name doesn't
   ///   count as taken.
   static func validationError(for name: String, replacing: ModelAlias? = nil) -> String? {
-    if name.isEmpty {
-      return "Enter a name."
+    var args: [String: Any] = [
+      "name": name,
+      "aliases": UserSettings.modelAliases.map { ["name": $0.name, "modelId": $0.modelId] },
+      "overrideNames": UserModelOverrides.current.map(\.name),
+    ]
+    if let replacing {
+      args["replacing"] = ["name": replacing.name, "modelId": replacing.modelId]
     }
-    if !name.allSatisfy(allowedCharacters.contains) {
-      return "Use lowercase letters, digits, dots, dashes, or underscores."
-    }
-    let taken = UserSettings.modelAliases.filter { $0 != replacing }.map(\.name)
-    if taken.contains(name) {
-      return "There's already an alias named \(name)."
-    }
-    // Sections a user defined in models.user.ini are models too, under
-    // whatever name they chose -- and the router refuses an alias that
-    // matches a model's name.
-    if UserModelOverrides.current.contains(where: { $0.name == name }) {
-      return "\(UserModelOverrides.filename) defines a model named \(name)."
-    }
-    return nil
+    return LlamaCore.callValue("aliases.validationError", "error", args)
   }
 
   /// The aliases a `models.user.ini` entry sets for `modelId`, if it sets any.
@@ -89,37 +73,28 @@ enum ModelAliases {
   /// at any time, and a server that won't start is a much worse outcome than
   /// one alias not resolving. First claim wins: generated sections come
   /// before user-only ones, so an alias set in the app keeps working.
+  ///
+  /// The merge is done by the Rust core (`aliases.removeConflicts`); sections
+  /// are exchanged as `{name, pairs:[{key,value}]}` to preserve key order.
   static func removeConflicts(from sections: [UserModelOverrides.Section])
     -> [UserModelOverrides.Section]
   {
-    let modelNames = Set(sections.map(\.name))
-    var claimed: Set<String> = []
+    let payload = sections.map { section -> [String: Any] in
+      [
+        "name": section.name,
+        "pairs": section.pairs.map { ["key": $0.key, "value": $0.value] },
+      ]
+    }
+    guard
+      let out: [[String: Any]] = LlamaCore.callValue(
+        "aliases.removeConflicts", "sections", ["sections": payload])
+    else { return sections }
 
-    return sections.map { section in
-      guard let value = section.pairs.first(where: { $0.key == presetKey })?.value else {
-        return section
+    return out.map { obj in
+      let pairs = (obj["pairs"] as? [[String: Any]] ?? []).map {
+        (key: $0["key"] as? String ?? "", value: $0["value"] as? String ?? "")
       }
-
-      var kept: [String] = []
-      for alias in value.split(separator: ",").map({ $0.trimmingCharacters(in: .whitespaces) })
-      where !alias.isEmpty {
-        if modelNames.contains(alias) || claimed.contains(alias) {
-          logger.error(
-            "Dropping alias '\(alias, privacy: .public)' for \(section.name, privacy: .public) -- already a model name or another model's alias"
-          )
-          continue
-        }
-        claimed.insert(alias)
-        kept.append(alias)
-      }
-
-      var section = section
-      if kept.isEmpty {
-        section.remove(presetKey)
-      } else {
-        section.set(presetKey, kept.joined(separator: ","))
-      }
-      return section
+      return UserModelOverrides.Section(name: obj["name"] as? String ?? "", pairs: pairs)
     }
   }
 }
