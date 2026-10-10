@@ -1,0 +1,220 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  PRODUCT_NAME: Llama
+  BUNDLE_ID: app.llama.Llama
+
+jobs:
+  build-and-release:
+    name: Build, Sign & Release
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98.0"
+          components: rustfmt, clippy
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-release-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-release-
+
+      - name: Build Rust core
+        run: cargo build --release -p llama-core-ffi
+
+      - name: Import signing certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN=build.keychain
+          CERTIFICATE_PATH="$RUNNER_TEMP/certificate.p12"
+
+          echo -n "$APPLE_CERTIFICATE" | base64 --decode -o "$CERTIFICATE_PATH"
+
+          security create-keychain -p "" "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
+          security unlock-keychain -p "" "$KEYCHAIN"
+          security set-keychain-settings -t 3600 -u "$KEYCHAIN"
+
+          security import "$CERTIFICATE_PATH" \
+            -k "$KEYCHAIN" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "" "$KEYCHAIN"
+
+          security find-identity -v -p codesigning "$KEYCHAIN"
+
+      - name: Resolve signing identity
+        id: identity
+        run: |
+          IDENTITY=$(security find-identity -v -p codesigning build.keychain \
+            | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "identity=$IDENTITY" >> "$GITHUB_OUTPUT"
+          echo "Signing with: $IDENTITY"
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building version: $VERSION"
+
+      - name: Build and archive
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          SIGNING_IDENTITY: ${{ steps.identity.outputs.identity }}
+          SPARKLE_PUBLIC_KEY: ${{ secrets.SPARKLE_PUBLIC_KEY }}
+        run: |
+          xcodebuild archive \
+            -scheme Llama \
+            -configuration Release \
+            -derivedDataPath build \
+            -archivePath build/Llama.xcarchive \
+            ARCHS=arm64 \
+            MARKETING_VERSION="${{ steps.version.outputs.version }}" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
+            CODE_SIGN_IDENTITY="$SIGNING_IDENTITY" \
+            CODE_SIGN_STYLE=Manual \
+            SPARKLE_PUBLIC_KEY="$SPARKLE_PUBLIC_KEY"
+
+      - name: Export signed app
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          SIGNING_IDENTITY: ${{ steps.identity.outputs.identity }}
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath build/Llama.xcarchive \
+            -exportPath build/export \
+            -exportOptionsPlist - <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>developer-id</string>
+            <key>teamID</key>
+            <string>${APPLE_TEAM_ID}</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>signingCertificate</key>
+            <string>${SIGNING_IDENTITY}</string>
+            <key>destination</key>
+            <string>export</string>
+          </dict>
+          </plist>
+          PLIST
+
+      - name: Notarize app
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          ditto -c -k --keepParent "build/export/${{ env.PRODUCT_NAME }}.app" \
+            "build/${{ env.PRODUCT_NAME }}-notarize.zip"
+
+          xcrun notarytool submit "build/${{ env.PRODUCT_NAME }}-notarize.zip" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_ID_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+
+          xcrun stapler staple "build/export/${{ env.PRODUCT_NAME }}.app"
+
+      - name: Create DMG
+        run: |
+          DMG_STAGING="build/dmg"
+          mkdir -p "$DMG_STAGING"
+          cp -R "build/export/${{ env.PRODUCT_NAME }}.app" "$DMG_STAGING/"
+          ln -s /Applications "$DMG_STAGING/Applications"
+
+          hdiutil create \
+            -volname "${{ env.PRODUCT_NAME }}" \
+            -srcfolder "$DMG_STAGING" \
+            -ov -format UDZO \
+            "build/${{ env.PRODUCT_NAME }}.dmg"
+
+      - name: Sign DMG
+        env:
+          SIGNING_IDENTITY: ${{ steps.identity.outputs.identity }}
+        run: |
+          codesign --sign "$SIGNING_IDENTITY" \
+            --timestamp \
+            "build/${{ env.PRODUCT_NAME }}.dmg"
+
+      - name: Notarize DMG
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          ditto -c -k --keepParent "build/${{ env.PRODUCT_NAME }}.dmg" \
+            "build/${{ env.PRODUCT_NAME }}-dmg-notarize.zip"
+
+          xcrun notarytool submit "build/${{ env.PRODUCT_NAME }}-dmg-notarize.zip" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_ID_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+
+          xcrun stapler staple "build/${{ env.PRODUCT_NAME }}.dmg"
+
+      - name: Download Sparkle tools
+        run: |
+          SPARKLE_VERSION="2.8.1"
+          curl -L "https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-for-Swift-Package-Manager.zip" \
+            -o build/Sparkle.zip
+          unzip -q build/Sparkle.zip -d build/Sparkle-tools
+          chmod +x build/Sparkle-tools/bin/generate_appcast
+
+      - name: Generate appcast
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          mkdir -p build/appcast-release
+          cp "build/${{ env.PRODUCT_NAME }}.dmg" build/appcast-release/
+
+          build/Sparkle-tools/bin/generate_appcast \
+            build/appcast-release \
+            --download-url-prefix "https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.version }}/"
+
+          cp build/appcast-release/appcast.xml build/appcast.xml
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "v${{ steps.version.outputs.version }}"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            build/Llama.dmg
+            build/appcast.xml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

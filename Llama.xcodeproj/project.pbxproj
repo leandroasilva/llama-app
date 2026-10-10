@@ -406,6 +406,7 @@
 					"$(SRCROOT)/target/release/libllama_core_ffi.a",
 				);
 				SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/Llama/CoreBridge/Llama-Bridging-Header.h";
+				SPARKLE_PUBLIC_KEY = "";
 				URL_SCHEME = "llama-dev";
 				URL_SCHEME_ALT = "llamabarn-dev";
 			};
@@ -448,6 +449,7 @@
 					"$(SRCROOT)/target/release/libllama_core_ffi.a",
 				);
 				SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/Llama/CoreBridge/Llama-Bridging-Header.h";
+				SPARKLE_PUBLIC_KEY = "";
 				URL_SCHEME = llama;
 				URL_SCHEME_ALT = llamabarn;
 			};

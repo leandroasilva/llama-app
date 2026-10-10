@@ -19,9 +19,9 @@
 		</dict>
 	</array>
 	<key>SUFeedURL</key>
-	<string>https://releases.erusev.com/llama/appcast.xml</string>
+	<string>https://github.com/leandroasilva/llama-app/releases/latest/download/appcast.xml</string>
 	<key>SUPublicEDKey</key>
-	<string>01xoznnymetv09HCBgDEoSpaz6WG5WY6EBB+VpbHRaU=</string>
+	<string>$(SPARKLE_PUBLIC_KEY)</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUScheduledCheckInterval</key>

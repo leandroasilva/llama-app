@@ -1,0 +1,18 @@
+_*
+.*
+!.github/
+!.gitignore
+
+*.md
+!readme.md
+!contributing.md
+
+*.log
+
+build
+xcuserdata
+
+# Rust
+/target
+
+ref
