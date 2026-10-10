@@ -221,8 +221,10 @@ extension ModelManager {
 
     // Sanity check: reject obviously broken downloads (error pages, empty files).
     // We don't require an exact size match — expected sizes can drift when HF re-uploads.
-    let minThreshold: Int64 = 1_000_000
-    if fileSize <= minThreshold {
+    // Threshold lives in the Rust core (`download.isTooSmall`).
+    if LlamaCore.callValue("download.isTooSmall", "tooSmall", ["size": fileSize])
+      ?? (fileSize <= 1_000_000)
+    {
       try? FileManager.default.removeItem(at: writer.partialURL)
       handleDownloadFailure(model: model, reason: "file too small (\(fileSize) B)")
       return
@@ -230,15 +232,21 @@ extension ModelManager {
 
     // Digest from the running hasher (covers existing-prefix re-hash at open time, plus streamed bytes).
     let computed = HFCache.hex(writer.hasher.finalize())
-    if let expected = writer.expectedBlobHash, expected != computed {
-      logger.error(
-        "Hash mismatch for \(writer.filename): expected \(expected), got \(computed)")
-      try? FileManager.default.removeItem(at: writer.partialURL)
-      handleDownloadFailure(
-        model: model,
-        reason: "File verification failed — the partial download was corrupt. Try again."
-      )
-      return
+    if let expected = writer.expectedBlobHash {
+      let matches: Bool =
+        LlamaCore.callValue(
+          "download.verifyHash", "matches", ["computed": computed, "expected": expected])
+        ?? (computed == expected)
+      if !matches {
+        logger.error(
+          "Hash mismatch for \(writer.filename): expected \(expected), got \(computed)")
+        try? FileManager.default.removeItem(at: writer.partialURL)
+        handleDownloadFailure(
+          model: model,
+          reason: "File verification failed — the partial download was corrupt. Try again."
+        )
+        return
+      }
     }
     let blobHash = writer.expectedBlobHash ?? computed
 
@@ -301,61 +309,27 @@ extension ModelManager {
   /// these codes for several reasons, so we hedge with "usually" and point the user
   /// at the most common remedy.
   nonisolated private func userMessage(forHTTPStatus status: Int) -> String {
-    switch status {
-    case 401:
-      return
-        "Hugging Face requires authentication for this download. Set a Hugging Face token in Settings and try again."
-    case 403, 429:
-      return
-        "Hugging Face refused the download (HTTP \(status)). This usually means a rate limit — try again in a few minutes, or set a Hugging Face token in Settings to lift the limit."
-    case 404:
-      return
-        "Hugging Face returned 404 for this file. The repo may have moved or been removed."
-    case 500...599:
-      return
-        "Hugging Face is temporarily unavailable (HTTP \(status)). Try again in a few minutes."
-    default:
-      return "Download failed with HTTP \(status)."
-    }
+    LlamaCore.callValue("download.userMessage", "message", ["status": status])
+      ?? "Download failed with HTTP \(status)."
   }
 
   /// Extracts the full (not just remaining) size of the remote file from the response.
   /// For 206 responses we parse `Content-Range: bytes X-Y/Z`; for 200 we fall back to `Content-Length`.
   /// Returns 0 when neither header is present / parseable.
   nonisolated private func extractFullSize(from response: HTTPURLResponse) -> Int64 {
-    if response.statusCode == 206,
-      let cr = response.value(forHTTPHeaderField: "Content-Range")
-    {
-      // Format: "bytes X-Y/Z" (Z may be "*" when total is unknown).
-      if let slash = cr.firstIndex(of: "/") {
-        let totalStr = cr[cr.index(after: slash)...]
-          .trimmingCharacters(in: .whitespaces)
-        if totalStr != "*", let total = Int64(totalStr) { return total }
-      }
-    }
-    if let lenStr = response.value(forHTTPHeaderField: "Content-Length"),
-      let len = Int64(lenStr)
-    {
-      return len
-    }
-    return 0
+    let headers: [[String]] = response.allHeaderFields.map { ["\($0.key)", "\($0.value)"] }
+    return (LlamaCore.callJSON("download.extractFullSize", [
+      "status": response.statusCode,
+      "headers": headers,
+    ])?["size"] as? NSNumber)?.int64Value ?? 0
   }
 
   // MARK: - Retry Logic
 
-  /// URLSession error codes we treat as transient/resumable network failures, as
-  /// opposed to actionable errors (bad certs, malformed URLs) that warrant an alert.
-  private static let transientNetworkErrorCodes: Set<Int> = [
-    NSURLErrorTimedOut,
-    NSURLErrorNetworkConnectionLost,
-    NSURLErrorNotConnectedToInternet,
-    NSURLErrorCannotConnectToHost,
-    NSURLErrorDNSLookupFailed,
-  ]
-
-  /// Whether an error is a transient, resumable network failure.
+  /// Whether an error is a transient, resumable network failure. The set of
+  /// codes lives in the Rust core (`download.isTransient`).
   func isTransientNetworkError(_ error: NSError) -> Bool {
-    Self.transientNetworkErrorCodes.contains(error.code)
+    LlamaCore.callValue("download.isTransient", "transient", ["code": error.code]) ?? false
   }
 
   /// Handles a transient network failure for one file within an active download.
@@ -368,7 +342,13 @@ extension ModelManager {
   ///   as a paused row (no modal) the user can resume by hand, with a fresh budget.
   func handleTransientFailure(model: Model, url: URL, modelId: String) {
     let attempts = activeDownloads[modelId]?.retryAttempts[url] ?? 0
-    if isNetworkAvailable && attempts < maxRetryAttempts {
+    // Retry-vs-park decision lives in the Rust core (`download.transientDecision`).
+    let decision = LlamaCore.callJSON("download.transientDecision", [
+      "isNetworkAvailable": isNetworkAvailable,
+      "attempts": attempts,
+      "maxAttempts": maxRetryAttempts,
+    ])
+    if (decision?["outcome"] as? String) == "retry" {
       scheduleRetry(url: url, modelId: modelId)
       return
     }
@@ -381,7 +361,8 @@ extension ModelManager {
       "Parking \(model.displayName) as paused after transient failure (network \(self.isNetworkAvailable ? "up, attempts exhausted" : "down"))"
     )
     tearDownActiveDownload(
-      modelId: modelId, outcome: .pause(resumeOnReconnect: !isNetworkAvailable))
+      modelId: modelId,
+      outcome: .pause(resumeOnReconnect: (decision?["resumeOnReconnect"] as? Bool) ?? false))
   }
 
   /// Schedules a retry with exponential backoff. The partial file on disk is our resume state,
@@ -390,8 +371,12 @@ extension ModelManager {
     let attempts = activeDownloads[modelId]?.retryAttempts[url] ?? 0
     activeDownloads[modelId]?.retryAttempts[url] = attempts + 1
 
-    // Exponential backoff: 2s, 4s, 8s
-    let delay = baseRetryDelay * pow(2.0, Double(attempts))
+    // Exponential backoff: 2s, 4s, 8s — computed by the Rust core
+    // (`download.retryDelay`: base · 2^attempts).
+    let delay =
+      LlamaCore.callValue("download.retryDelay", "delay", [
+        "attempts": attempts, "base": baseRetryDelay,
+      ]) ?? (baseRetryDelay * pow(2.0, Double(attempts)))
 
     logger.info(
       "Scheduling retry \(attempts + 1)/\(self.maxRetryAttempts) for \(url.lastPathComponent) in \(delay)s"

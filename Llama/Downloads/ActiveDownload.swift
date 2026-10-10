@@ -46,14 +46,14 @@ struct ActiveDownload {
 
   /// Current transfer rate in bytes/sec, averaged over `rateWindow`.
   /// Nil until the window holds at least a second of data — a shorter span
-  /// makes the first readouts wildly noisy.
+  /// makes the first readouts wildly noisy. Computed by the Rust core
+  /// (`download.rate`), which also clamps a rewound byte count to zero.
   var bytesPerSecond: Int64? {
-    guard let first = rateSamples.first, let last = rateSamples.last else { return nil }
-    let span = last.time.timeIntervalSince(first.time)
-    guard span >= 1 else { return nil }
-    // Clamp: a retry can rewind the byte count (truncated `.partial`), and a
-    // negative rate must never reach the UI.
-    return max(0, Int64(Double(last.bytes - first.bytes) / span))
+    let samples: [[Any]] = rateSamples.map {
+      [$0.time.timeIntervalSince1970, Int($0.bytes)]
+    }
+    return (LlamaCore.callJSON("download.rate", ["samples": samples, "window": Self.rateWindow])?["rate"]
+      as? NSNumber)?.int64Value
   }
 
   mutating func addTask(_ task: URLSessionDataTask) {
@@ -73,17 +73,22 @@ struct ActiveDownload {
   /// `activeBytes` is the total bytes currently on disk across all in-flight `.partial` files;
   /// `expectedActiveBytes` is the sum of each task's known total size (0 before the response arrives).
   mutating func refreshProgress(activeBytes: Int64, expectedActiveBytes: Int64) {
-    let totalCompleted = completedFilesBytes + activeBytes
-    // Don't shrink totalUnitCount — it's seeded from the HF resolve's
-    // aggregated byte count and a response's Content-Length may be missing
-    // until the first byte arrives.
-    let totalExpected = max(progress.totalUnitCount, completedFilesBytes + expectedActiveBytes)
-    progress.totalUnitCount = max(totalExpected, 1)
-    progress.completedUnitCount = totalCompleted
+    // The progress math (don't shrink totalUnitCount, `max(…, 1)` floor) is
+    // done by the Rust core (`download.refreshProgress`).
+    let out = LlamaCore.callJSON("download.refreshProgress", [
+      "totalUnitCount": progress.totalUnitCount,
+      "completedFilesBytes": completedFilesBytes,
+      "activeBytes": activeBytes,
+      "expectedActiveBytes": expectedActiveBytes,
+    ])
+    progress.totalUnitCount =
+      (out?["totalUnitCount"] as? NSNumber)?.int64Value ?? max(progress.totalUnitCount, 1)
+    progress.completedUnitCount =
+      (out?["completedUnitCount"] as? NSNumber)?.int64Value ?? (completedFilesBytes + activeBytes)
 
-    // Feed the rate window.
+    // Feed the rate window (pruning stays here; only the average is in Rust).
     let now = Date()
-    rateSamples.append((time: now, bytes: totalCompleted))
+    rateSamples.append((time: now, bytes: completedFilesBytes + activeBytes))
     rateSamples.removeAll { now.timeIntervalSince($0.time) > Self.rateWindow }
   }
 
