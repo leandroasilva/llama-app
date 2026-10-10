@@ -253,11 +253,13 @@ final class Phase1FixtureTests: XCTestCase {
   }
 
   private struct OverridesFixture: Decodable {
+    struct ParseCase: Decodable { let text: String; let sections: [TestSection] }
     struct SerializeCase: Decodable { let sections: [TestSection]; let text: String }
     struct ApplyCase: Decodable {
       let generated: [TestSection]; let overrides: [TestSection]
       let suspended: Bool; let expected: [TestSection]
     }
+    let parseCases: [ParseCase]
     let serializeCases: [SerializeCase]
     let applyCases: [ApplyCase]
   }
@@ -271,14 +273,33 @@ final class Phase1FixtureTests: XCTestCase {
 
   func testOverridesAndAliasesFixtures() throws {
     let of = try load("user_model_overrides.json", as: OverridesFixture.self)
+    // The parser now lives in the core (`ini.parse`); pin it to the fixture.
+    for c in of.parseCases {
+      let out = try XCTUnwrap(LlamaCore.callJSON("ini.parse", ["text": c.text]))
+      let sections = try XCTUnwrap(out["sections"] as? [[String: Any]])
+      XCTAssertEqual(sections.map(UserModelOverrides.Section.fromFFI).map(toTest), c.sections)
+    }
     for c in of.serializeCases {
       let text = c.sections.map(toSection).map { $0.serialized() }.joined()
       XCTAssertEqual(text, c.text)
     }
+    // The Swift wrapper reads the global suspension flag, so its non-suspended
+    // path is pinned here; the suspended branch is pinned through `ini.apply`
+    // directly (the wrapper delegates to it) below.
     for c in of.applyCases where !c.suspended {
       let got = UserModelOverrides.apply(
         to: c.generated.map(toSection), overrides: c.overrides.map(toSection))
       XCTAssertEqual(got.map(toTest), c.expected)
+    }
+    for c in of.applyCases {
+      let out = try XCTUnwrap(
+        LlamaCore.callJSON("ini.apply", [
+          "generated": c.generated.map(toSection).map(\.ffiValue),
+          "overrides": c.overrides.map(toSection).map(\.ffiValue),
+          "suspended": c.suspended,
+        ]))
+      let sections = try XCTUnwrap(out["sections"] as? [[String: Any]])
+      XCTAssertEqual(sections.map(UserModelOverrides.Section.fromFFI).map(toTest), c.expected)
     }
 
     let af = try load("model_aliases.json", as: AliasesFixture.self)

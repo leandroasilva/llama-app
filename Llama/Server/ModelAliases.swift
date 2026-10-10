@@ -79,22 +79,12 @@ enum ModelAliases {
   static func removeConflicts(from sections: [UserModelOverrides.Section])
     -> [UserModelOverrides.Section]
   {
-    let payload = sections.map { section -> [String: Any] in
-      [
-        "name": section.name,
-        "pairs": section.pairs.map { ["key": $0.key, "value": $0.value] },
-      ]
-    }
     guard
       let out: [[String: Any]] = LlamaCore.callValue(
-        "aliases.removeConflicts", "sections", ["sections": payload])
+        "aliases.removeConflicts", "sections",
+        ["sections": sections.map(\.ffiValue)])
     else { return sections }
 
-    return out.map { obj in
-      let pairs = (obj["pairs"] as? [[String: Any]] ?? []).map {
-        (key: $0["key"] as? String ?? "", value: $0["value"] as? String ?? "")
-      }
-      return UserModelOverrides.Section(name: obj["name"] as? String ?? "", pairs: pairs)
-    }
+    return out.map(UserModelOverrides.Section.fromFFI)
   }
 }

@@ -68,6 +68,20 @@ enum UserModelOverrides {
       }
       return out + "\n"
     }
+
+    /// Encodes for the `ini.*` / `aliases.*` FFI exchange
+    /// (`{name, pairs:[{key,value}]}`), preserving key order.
+    var ffiValue: [String: Any] {
+      ["name": name, "pairs": pairs.map { ["key": $0.key, "value": $0.value] }]
+    }
+
+    /// Rebuilds a `Section` from an `ini.*` / `aliases.*` FFI object.
+    static func fromFFI(_ obj: [String: Any]) -> Section {
+      let pairs = (obj["pairs"] as? [[String: Any]] ?? []).map {
+        (key: $0["key"] as? String ?? "", value: $0["value"] as? String ?? "")
+      }
+      return Section(name: obj["name"] as? String ?? "", pairs: pairs)
+    }
   }
 
   /// Prepended to the generated `models.ini`.
@@ -235,37 +249,13 @@ enum UserModelOverrides {
 
   /// Minimal INI parse: `[section]` headers and `key = value` lines.
   ///
-  /// Comments (`;` or `#`) and blank lines are dropped rather than preserved --
-  /// the output is a generated file users aren't meant to edit, so carrying
-  /// their comments into it would invite editing the wrong file. Keys before
-  /// any section header are ignored: `models.ini` has no global section, so
-  /// they'd have nowhere to go.
+  /// The parser lives in the Rust core (`ini.parse`); comments (`;`/`#`),
+  /// blank lines, and keys before any section header are dropped there.
   private static func parse(_ text: String) -> [Section] {
-    var sections: [Section] = []
-
-    for rawLine in text.components(separatedBy: .newlines) {
-      let line = rawLine.trimmingCharacters(in: .whitespaces)
-      if line.isEmpty || line.hasPrefix(";") || line.hasPrefix("#") { continue }
-
-      if line.hasPrefix("[") && line.hasSuffix("]") {
-        let name = String(line.dropFirst().dropLast()).trimmingCharacters(in: .whitespaces)
-        if !name.isEmpty {
-          sections.append(Section(name: name, pairs: []))
-        }
-        continue
-      }
-
-      // `value` may itself contain `=` (e.g. `chat-template-kwargs`), so split
-      // on the first separator only.
-      guard let separator = line.firstIndex(of: "="), !sections.isEmpty else { continue }
-      let key = String(line[line.startIndex..<separator]).trimmingCharacters(in: .whitespaces)
-      let value = String(line[line.index(after: separator)...]).trimmingCharacters(in: .whitespaces)
-      if key.isEmpty { continue }
-
-      sections[sections.count - 1].set(key, value)
-    }
-
-    return sections
+    guard let out = LlamaCore.callJSON("ini.parse", ["text": text]),
+      let sections = out["sections"] as? [[String: Any]]
+    else { return [] }
+    return sections.map(Section.fromFFI)
   }
 
   /// Applies user overrides to app-generated sections.
@@ -274,28 +264,18 @@ enum UserModelOverrides {
   /// restating the `model` and `mmproj` paths. Sections that match nothing the
   /// app generated are appended verbatim -- that's what lets someone define a
   /// model the scan can't produce, such as a draft model from another repo.
+  ///
+  /// The merge lives in the Rust core (`ini.apply`); the suspension flag is
+  /// passed through so a file the server already rejected isn't reapplied.
   static func apply(to generated: [Section], overrides: [Section]) -> [Section] {
-    // A suspended file is one the server already rejected; applying it again
-    // would just reproduce the failure.
-    guard !isSuspended else { return generated }
-
-    var merged = generated
-    var indexByName: [String: Int] = [:]
-    for (index, section) in merged.enumerated() {
-      indexByName[section.name] = index
-    }
-
-    for override in overrides {
-      if let index = indexByName[override.name] {
-        for pair in override.pairs {
-          merged[index].set(pair.key, pair.value)
-        }
-      } else {
-        indexByName[override.name] = merged.count
-        merged.append(override)
-      }
-    }
-
-    return merged
+    guard
+      let out = LlamaCore.callJSON("ini.apply", [
+        "generated": generated.map(\.ffiValue),
+        "overrides": overrides.map(\.ffiValue),
+        "suspended": isSuspended,
+      ]),
+      let sections = out["sections"] as? [[String: Any]]
+    else { return generated }
+    return sections.map(Section.fromFFI)
   }
 }
