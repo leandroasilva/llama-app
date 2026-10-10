@@ -1,0 +1,257 @@
+import AppKit
+
+// Theme provides centralized styling for the app's UI
+enum Theme {
+  // Colors used throughout the app
+  enum Colors {
+    // Use custom color instead of NSColor.labelColor for better consistency with other macOS menus
+    // labelColor's pure white in dark mode was too prominent
+    static let textPrimary = NSColor.dynamic(
+      light: NSColor.black.withAlphaComponent(0.85),
+      dark: NSColor.white.withAlphaComponent(0.85)
+    )
+    // Tertiary text color -- used for less prominent text
+    // Switched from NSColor.tertiaryLabelColor to custom dynamic color for predictability,
+    // as semantic colors can have varying transparency across contexts, leading to contrast issues
+    // (e.g., quantization labels becoming invisible on highlighted backgrounds).
+    static let textSecondary = NSColor.dynamic(
+      light: NSColor.black.withAlphaComponent(0.45),
+      dark: NSColor.white.withAlphaComponent(0.45)
+    )
+
+    // Tertiary text color -- dimmer than secondary; used for the least
+    // prominent metadata (e.g. leftover tag segments after the model name)
+    static let textTertiary = NSColor.dynamic(
+      light: NSColor.black.withAlphaComponent(0.32),
+      dark: NSColor.white.withAlphaComponent(0.32)
+    )
+
+    // Tint color for inactive model icons -- balanced between primary and secondary text
+    static let modelIconTint = NSColor.dynamic(
+      light: NSColor.black.withAlphaComponent(0.65),
+      dark: NSColor.white.withAlphaComponent(0.65)
+    )
+
+    // Subtle background color for visual grouping -- adapts to light/dark mode
+    static let subtleBackground = NSColor.dynamic(
+      light: NSColor.black.withAlphaComponent(0.06),
+      dark: NSColor.white.withAlphaComponent(0.11)
+    )
+
+    // Border color for separators and dividers -- adapts to light/dark mode
+    static let border = NSColor.dynamic(
+      light: NSColor.black.withAlphaComponent(0.15),
+      dark: NSColor.white.withAlphaComponent(0.25)
+    )
+
+    // Separator color -- matches native separator visual weight
+    static let separator = NSColor.dynamic(
+      light: NSColor.black.withAlphaComponent(0.1),
+      dark: NSColor.white.withAlphaComponent(0.15)
+    )
+
+    // Track of the segmented pill picker -- tuned to match the bezel fill of
+    // the native small buttons in the neighboring settings rows (measured:
+    // ~8% black in light / ~7.5% white in dark over the row background;
+    // semantic colors like controlColor render far stronger)
+    static let pillTrack = NSColor.dynamic(
+      light: NSColor.black.withAlphaComponent(0.08),
+      dark: NSColor.white.withAlphaComponent(0.075)
+    )
+
+    // Selected-pill thumb in the segmented pill picker -- must read lighter
+    // than the picker's track in both appearances (controlBackgroundColor
+    // fails at this in dark mode, where it's darker than the track)
+    static let pillThumb = NSColor.dynamic(
+      light: NSColor.white,
+      dark: NSColor.white.withAlphaComponent(0.25)
+    )
+
+    // Success/checkmark color -- darker in light mode for better contrast
+    static let success = NSColor.dynamic(
+      light: NSColor(red: 0.2, green: 0.55, blue: 0.2, alpha: 1.0),
+      dark: NSColor.systemGreen
+    )
+  }
+
+  // Fonts used throughout the app
+  enum Fonts {
+    // Primary font -- used for main text like model names
+    static let primary = NSFont.systemFont(ofSize: 13)
+    // Secondary font -- used for metadata and supplementary text
+    static let secondary = NSFont.systemFont(ofSize: 11)
+    // Secondary font with tabular (monospaced) digits -- used for live-updating
+    // numeric readouts (download percent + speed) so changing digits don't shift
+    // the text's width and jitter the layout.
+    static let secondaryTabular = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+  }
+}
+
+// MARK: - Label Factories
+
+// Factory methods for creating consistently styled text labels
+extension Theme {
+  // Creates a label with primary font (13pt) and primary text color
+  // Used for main content like model names (line 1)
+  static func primaryLabel(_ text: String = "") -> NSTextField {
+    makeLabel(text, font: Fonts.primary, color: Colors.textPrimary)
+  }
+
+  // Creates a label with secondary font (11pt) and primary text color
+  // Used for important metadata that should be smaller than primary text
+  static func secondaryLabel(_ text: String = "") -> NSTextField {
+    makeLabel(text, font: Fonts.secondary, color: Colors.textPrimary)
+  }
+
+  // Creates a label with secondary font (11pt) and tertiary text color
+  // Used for less prominent metadata like model details (line 2)
+  static func tertiaryLabel(_ text: String = "") -> NSTextField {
+    makeLabel(text, font: Fonts.secondary, color: Colors.textSecondary)
+  }
+
+  // Internal helper -- creates a non-editable, non-selectable label with specified styling
+  private static func makeLabel(_ text: String, font: NSFont, color: NSColor) -> NSTextField {
+    let label = NSTextField(labelWithString: text)
+    label.font = font
+    label.textColor = color
+    return label
+  }
+}
+
+// MARK: - Attributed String Helpers
+
+// Attribute dictionaries for creating styled NSAttributedString instances
+extension Theme {
+  // Returns attributes for secondary-style text with custom color
+  // Used when you need secondary font but want control over the color
+  static func secondaryAttributes(color: NSColor) -> [NSAttributedString.Key: Any] {
+    [.font: Fonts.secondary, .foregroundColor: color]
+  }
+
+  // Paragraph style that disables letter-spacing tightening before truncation.
+  // Without it, labels shrink their glyphs as a fallback before adding the "..."
+  // ellipsis. An attributed string's paragraph style overrides the NSTextField's
+  // own allowsDefaultTighteningForTruncation, so metadata/name builders apply this.
+  // Shared instance — paragraph styles are immutable once configured.
+  static let noTighteningParagraphStyle: NSParagraphStyle = {
+    let style = NSMutableParagraphStyle()
+    style.allowsDefaultTighteningForTruncation = false
+    return style
+  }()
+}
+
+// MARK: - Image View Configuration
+
+// Helper for configuring image views with SF Symbols
+extension Theme {
+  /// Resolves a glyph name to an image: an SF Symbol if the system has one,
+  /// otherwise a symbol set of our own from the asset catalog. Custom symbol
+  /// sets respond to `symbolConfiguration` and tinting just like system
+  /// symbols, so callers don't need to know which kind they're asking for.
+  static func symbolImage(_ name: String) -> NSImage? {
+    NSImage(systemSymbolName: name, accessibilityDescription: nil) ?? NSImage(named: name)
+  }
+
+  // Configures an NSImageView with an SF Symbol icon and consistent styling
+  // - Parameters:
+  //   - view: The image view to configure
+  //   - symbol: SF Symbol name (e.g., "circle.fill", "arrow.down")
+  //   - tooltip: Optional hover tooltip text
+  //   - color: Tint color for the symbol (defaults to textSecondary)
+  //   - pointSize: Size of the symbol in points (defaults to 13)
+  static func configure(
+    _ view: NSImageView,
+    symbol: String,
+    tooltip: String? = nil,
+    color: NSColor = Colors.textSecondary,
+    pointSize: CGFloat = 13
+  ) {
+    view.image = symbolImage(symbol)
+    view.toolTip = tooltip
+    view.contentTintColor = color
+    view.symbolConfiguration = .init(pointSize: pointSize, weight: .regular)
+    view.translatesAutoresizingMaskIntoConstraints = false
+  }
+
+  // Configures an NSButton with an SF Symbol icon and consistent styling
+  static func configure(
+    _ button: NSButton,
+    symbol: String,
+    tooltip: String? = nil,
+    color: NSColor = Colors.textSecondary,
+    pointSize: CGFloat = 13
+  ) {
+    button.image = symbolImage(symbol)
+    button.toolTip = tooltip
+    button.contentTintColor = color
+    button.symbolConfiguration = .init(pointSize: pointSize, weight: .regular)
+    button.isBordered = false
+    button.title = ""
+    button.bezelStyle = .inline
+    button.translatesAutoresizingMaskIntoConstraints = false
+  }
+}
+
+// MARK: - Copy Confirmation Helper
+
+extension Theme {
+  /// Updates a copy button's icon based on confirmation state.
+  /// - Parameters:
+  ///   - button: The button to update
+  ///   - showingConfirmation: Whether to show checkmark or copy icon
+  static func updateCopyIcon(_ button: NSButton, showingConfirmation: Bool) {
+    let iconName = showingConfirmation ? "checkmark" : "doc.on.doc"
+    button.image = NSImage(systemSymbolName: iconName, accessibilityDescription: "Copy")
+  }
+}
+
+// MARK: - Helpers
+
+// Creates colors that automatically adapt to light/dark mode
+extension NSColor {
+  // Creates a dynamic color that changes based on the system appearance
+  // - Parameters:
+  //   - light: Color to use in light mode
+  //   - dark: Color to use in dark mode
+  // - Returns: An NSColor that adapts to the current appearance
+  static func dynamic(light: NSColor, dark: NSColor) -> NSColor {
+    NSColor(name: nil) { appearance in
+      appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+    }
+  }
+}
+
+// Helpers for setting CALayer colors that respect dynamic appearance
+extension CALayer {
+  // Sets the layer's background color, resolving dynamic colors for current appearance
+  // - Parameters:
+  //   - color: The color to set (can be dynamic)
+  //   - view: The view whose appearance should be used for resolving the color
+  func setBackgroundColor(_ color: NSColor, in view: NSView) {
+    backgroundColor = color.resolvedColor(in: view)
+  }
+
+  // Sets the layer's border color, resolving dynamic colors for current appearance
+  // - Parameters:
+  //   - color: The color to set (can be dynamic)
+  //   - view: The view whose appearance should be used for resolving the color
+  func setBorderColor(_ color: NSColor, in view: NSView) {
+    borderColor = color.resolvedColor(in: view)
+  }
+}
+
+// Internal helper for resolving dynamic NSColor to CGColor
+extension NSColor {
+  // Resolves this NSColor to a CGColor using the view's effective appearance
+  // This is needed because CALayer uses CGColor, not NSColor, and dynamic colors
+  // need to be resolved in the context of a specific appearance
+  // - Parameter view: The view whose effective appearance should be used
+  // - Returns: A resolved CGColor appropriate for the current appearance
+  fileprivate func resolvedColor(in view: NSView) -> CGColor {
+    var resolved = NSColor.clear.cgColor
+    view.effectiveAppearance.performAsCurrentDrawingAppearance {
+      resolved = self.cgColor
+    }
+    return resolved
+  }
+}

@@ -1,0 +1,896 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Build an API request</title>
+<style>
+  /* Neutrals are actually neutral -- equal parts, no hue bias. They were warm
+     while the accent was a hardcoded orange, which read as dirty once the
+     accent went blue. Biasing them blue instead would only work as long as
+     the accent stays blue, and it comes from the system now: a browser that
+     exposes the real one could hand us green. Neutral greys sit with any
+     accent, and match the platform greys this page is seen beside.
+     The syntax palette is unaffected -- purple, green and amber are contrast
+     colours against the ground, not neighbours of the accent. */
+  :root {
+    --bg: #ffffff;
+    --panel: #f6f6f6;
+    --border: #e3e3e3;
+    --text: #1a1a1a;
+    --muted: #666666;
+    /* The CSS system accent. Chrome deliberately reports a fixed blue here
+       rather than the accent from System Settings: the real value is exposed
+       only to installed web apps, because an arbitrary user-chosen colour is
+       a fingerprinting vector. In a plain tab -- which is how this page is
+       always opened -- that makes this "the platform's blue", which is what
+       we want, and which matches the app's tinted controls in their default
+       state. Safari may well hand back the actual accent; AccentColorText is
+       used for text on top rather than white so that case stays legible. */
+    --accent: AccentColor;
+    --on-accent: AccentColorText;
+    /* Failure states get their own colour rather than the accent. They carry
+       a meaning the accent doesn't, and an accent that varies by platform or
+       preference could render "failed" in something reassuring. */
+    --danger: #b3261e;
+    --code-bg: #fafafa;
+    --key: #8a5cbf;
+    --str: #3d7a4e;
+    --num: #b0632a;
+    --punct: #999999;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161616;
+      --panel: #1e1e1e;
+      --border: #303030;
+      --text: #ebebeb;
+      --muted: #969696;
+      --danger: #f28177;
+      --code-bg: #121212;
+      --key: #c6a0ec;
+      --str: #8fce9f;
+      --num: #e0a06a;
+      --punct: #6e6e6e;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 ui-sans-serif, -apple-system, system-ui, sans-serif;
+  }
+  header {
+    padding: 20px 24px 16px;
+    position: relative;
+  }
+  /* The rule is drawn inset to the header's own padding rather than as a
+     border on the box, so its ends line up with the text above it and the
+     columns below. As a plain border-bottom it overhung the content by 24px
+     each side -- invisible while the page was full-bleed, obvious once it
+     was capped and centred. */
+  header::after {
+    content: ""; position: absolute; left: 24px; right: 24px; bottom: 0;
+    height: 1px; background: var(--border);
+  }
+  header h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+  /* Full width, matching the OpenAI and Anthropic playgrounds this sits
+     alongside in people's heads. The snippet itself never needs the room (85
+     characters at its widest), but the response does: it wraps, so every
+     extra pixel is one less wrapped line to read. A capped column was tried
+     and made the request look right at the expense of the response. */
+  .layout { display: grid; grid-template-columns: 340px minmax(0, 1fr); gap: 0; align-items: start; }
+  @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } }
+  .controls { padding: 20px 24px 40px; border-right: 1px solid var(--border); }
+  @media (max-width: 860px) { .controls { border-right: none; border-bottom: 1px solid var(--border); } }
+  .output { padding: 20px 24px 40px; min-width: 0; }
+
+  .group { margin-bottom: 22px; }
+  .group > label.title,
+  .section-title {
+    /* Fixed height, shared with .snippet-head opposite, so the first control
+       in the sidebar and the code block line up across the two columns. */
+    display: flex;
+    align-items: center;
+    min-height: 24px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+  select, textarea, input[type=text] {
+    width: 100%;
+    font: inherit;
+    color: var(--text);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 7px 9px;
+  }
+  textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; resize: vertical; }
+  select:focus, textarea:focus, input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+  /* segmented control */
+  .seg { display: flex; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 2px; gap: 2px; }
+  .seg button {
+    flex: 1; font: inherit; font-size: 12.5px; padding: 5px 4px; border: 0; border-radius: 4px;
+    background: transparent; color: var(--muted); cursor: pointer; white-space: nowrap;
+  }
+  .seg button[aria-pressed=true] { background: var(--bg); color: var(--text); font-weight: 550; box-shadow: 0 1px 2px rgba(0,0,0,.10); }
+
+  /* toggle rows */
+  .toggle { display: flex; align-items: flex-start; gap: 9px; padding: 7px 0; border-bottom: 1px solid var(--border); }
+  .toggle:last-child { border-bottom: 0; }
+  .toggle input { margin: 3px 0 0; accent-color: var(--accent); width: 15px; height: 15px; flex: none; }
+  .toggle .body { min-width: 0; }
+  .toggle .name { display: block; cursor: pointer; }
+  /* Every option carries a line saying what it IS, not what it sends. The
+     snippet already shows the parameter, and a description of the wire format
+     has to be rewritten per endpoint and can fall out of step with it; what
+     the option means is the same on all three. An unavailable option borrows
+     the line to explain itself. */
+  .toggle .hint { display: block; color: var(--muted); font-size: 12px; margin-top: 1px; }
+  .toggle .hint:empty { display: none; }
+  .toggle code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; color: var(--muted); }
+  /* An option the selected model can't do is dimmed and disabled, not hidden:
+     hiding it would make the capability undiscoverable and make the list jump
+     as you switch models. The hint says why. */
+  .toggle.unavailable { opacity: 0.55; }
+  .toggle.unavailable .name { cursor: default; }
+
+  /* snippet */
+  .snippet-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; min-height: 24px; }
+  .snippet-head .endpoint { flex: 1; margin: 0; }
+  /* Send leads: it's the primary action, and this row reads as the end of the
+     request rather than as a toolbar. */
+  .under-actions { display: flex; gap: 8px; margin-top: 12px; }
+  .snippet-head .section-title { margin: 0; }
+  .snippet-head .filler { flex: 1; }
+  .endpoint {
+    margin: 0; font-size: 12px; color: var(--muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .endpoint span { font-weight: 600; color: var(--accent); }
+  .endpoint code { font-family: inherit; }
+  .endpoint .dim { opacity: 0.6; }
+  /* Full size again. These were compressed to fit the 24px header row that
+     lines the code block up with the first control in the sidebar; below the
+     block they no longer set that height, so the constraint is gone. */
+  button.action {
+    font: inherit; font-size: 13px; padding: 6px 14px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer;
+  }
+  button.action:hover { border-color: var(--muted); }
+  button.action.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  pre {
+    margin: 0; background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 14px 16px; overflow-x: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; line-height: 1.6;
+    white-space: pre; tab-size: 2;
+  }
+  .k { color: var(--key); } .s { color: var(--str); } .n { color: var(--num); } .p { color: var(--punct); }
+  .note { color: var(--muted); font-size: 12.5px; margin: 10px 0 0; }
+  .note code { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; }
+  #response { margin-top: 20px; display: none; }
+  #response.show { display: block; }
+  .status { color: var(--muted); font-size: 12.5px; }
+  .status.err { color: var(--danger); }
+
+  /* The response wraps; the snippet above does not. They are different kinds
+     of content: the snippet is code you copy, and it measures 85 characters
+     at its widest, so it fits. A response carries one pathological line --
+     reasoning_content arrives as a single escaped blob, ~785 characters
+     against a median of 24 -- which would otherwise stretch the block to
+     ~5900px and leave every other line stranded in white space. Widening the
+     page cannot fix that ratio; wrapping does. */
+  #responseBody { white-space: pre-wrap; overflow-wrap: anywhere; }
+  #responseBody:not(:has(span)) { color: var(--muted); }
+
+  /* Offline banner -- tinted rather than loud: the page still does something
+     useful without a server (the snippet is just text you can copy). */
+  #offline {
+    width: calc(100% - 48px); margin: 16px auto 0; padding: 10px 14px;
+    border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border));
+    background: color-mix(in srgb, var(--danger) 8%, transparent);
+    border-radius: 7px; font-size: 13px; display: flex; gap: 7px; flex-wrap: wrap;
+  }
+  #offline[hidden] { display: none; }
+  #offline strong { font-weight: 600; }
+  #offline span { color: var(--muted); }
+</style>
+</head>
+<body>
+
+<!-- Shown only when /v1/models can't be reached. Page-level because the
+     failure isn't about any one control: the model list is a guess AND Send
+     will fail. Above the header, not below it -- this header is content (a
+     title), not persistent chrome, and a condition affecting the whole page
+     shouldn't read as subordinate to the page's own title. Sitting first
+     also keeps it clear of the columns' vertical divider.
+     Both the title and the detail are filled in by loadModels: a server
+     that's down and a server that's up but refusing this page are different
+     problems with different fixes, and naming the wrong one sends people
+     looking for a server that's already running. -->
+<div id="offline" hidden>
+  <strong id="offlineTitle"></strong>
+  <span id="offlineDetail"></span>
+</div>
+
+<header>
+  <h1>Build an API request</h1>
+</header>
+
+<div class="layout">
+  <div class="controls">
+
+    <!-- Control order: form-level first, then content-level.
+         =====================================================
+         Language and API decide the FORM the request takes; Model, Prompt
+         and Options fill in its CONTENT. The test is how many existing lines
+         a change REPLACES, not how much it changes overall:
+
+           language  replaces ~10 lines   (different client, different syntax)
+           API       replaces   4-8       (different client, endpoint, body shape)
+           model     replaces     1       (a value)
+           prompt    replaces     1       (a value)
+           tools     replaces     0, adds 17
+
+         Tools rewrites a big share of the snippet but purely by appending, so
+         raw "how much changed" would rank it second and mislead. Replace-vs-add
+         puts the two frame-setting controls on top, where they read as a pair
+         because they are the same kind of thing.
+
+         Where a new control goes: reshapes the whole snippet (sync vs async,
+         with/without error handling) -> up here with Language. Adds or edits
+         a field in the request body (top_p, a system message) -> Options.
+
+         Two things this order deliberately rejects:
+         - Workflow order (language last, just before you copy). Nobody
+           reaches the bottom and then decides what language they work in --
+           it is a fact about the reader that predates the visit, so it
+           frames the page rather than concluding it.
+         - The docs convention of putting the language picker directly above
+           the code block. That works because a docs page has no control
+           column; here it would split the controls across two places, and
+           people stopped wondering where it was once it moved back. -->
+
+    <div class="group">
+      <span class="section-title">Language</span>
+      <div class="seg" id="langSeg">
+        <button data-v="curl" aria-pressed="true">curl</button>
+        <button data-v="python" aria-pressed="false">Python</button>
+        <button data-v="js" aria-pressed="false">JavaScript</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <span class="section-title">API</span>
+      <div class="seg" id="apiSeg">
+        <button data-v="chat" aria-pressed="true">OpenAI chat</button>
+        <button data-v="responses" aria-pressed="false">Responses</button>
+        <button data-v="anthropic" aria-pressed="false">Anthropic</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <label class="title" for="model">Model</label>
+      <select id="model"></select>
+    </div>
+
+    <div class="group">
+      <span class="section-title">Options</span>
+
+      <div class="toggle">
+        <input type="checkbox" id="thinking" checked>
+        <span class="body">
+          <label class="name" for="thinking">Thinking</label>
+          <span class="hint">the model reasons before answering</span>
+        </span>
+      </div>
+
+      <div class="toggle">
+        <input type="checkbox" id="stream">
+        <span class="body">
+          <label class="name" for="stream">Stream</label>
+          <span class="hint">tokens arrive as they're generated</span>
+        </span>
+      </div>
+
+      <div class="toggle">
+        <input type="checkbox" id="json">
+        <span class="body">
+          <label class="name" for="json">Structured output</label>
+          <span class="hint">you define the schema of the reply</span>
+        </span>
+      </div>
+
+      <div class="toggle">
+        <input type="checkbox" id="image">
+        <span class="body">
+          <label class="name" for="image">Image input</label>
+          <span class="hint">send a picture along with the text</span>
+        </span>
+      </div>
+
+      <div class="toggle">
+        <input type="checkbox" id="tools">
+        <span class="body">
+          <label class="name" for="tools">Tools</label>
+          <span class="hint">let the model call a function</span>
+        </span>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="output">
+    <!-- The endpoint doubles as this column's heading: it names what the
+         block below is (a POST to this path) instead of restating "Request",
+         and it's the only place the method and path appear once you switch to
+         an SDK snippet, which buries them in a method name. -->
+    <div class="snippet-head">
+      <p class="endpoint"><span>POST</span> <code id="endpointPath"></code> <code class="dim" id="endpointBase"></code></p>
+    </div>
+    <pre id="snippet"></pre>
+    <!-- Notes belong with the request they qualify, so they sit above the
+         actions rather than after them; below, they would separate Send from
+         the response that renders directly beneath it. -->
+    <p class="note" id="caveat"></p>
+    <div class="under-actions">
+      <button class="action primary" id="send">Send</button>
+      <button class="action" id="copy">Copy</button>
+    </div>
+
+    <div id="response">
+      <div class="snippet-head">
+        <span class="section-title">Response</span>
+        <span class="status" id="status"></span>
+        <span class="filler"></span>
+      </div>
+      <pre id="responseBody"></pre>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Config injected by RequestBuilder.swift before this script runs: the
+// resolved base URL (honouring a custom port / network bind address) and the
+// model the user opened this from. Falls back to defaults when the page is
+// opened standalone in a browser, which is how it stays testable outside the app.
+// ---------------------------------------------------------------------------
+const CONFIG = window.LLAMA_CONFIG || {};
+const BASE = CONFIG.baseUrl || "http://localhost:9931";
+
+// Models with a vision projector, learned from /v1/models. `knowCapabilities`
+// stays false when the server can't be reached, in which case nothing is
+// disabled -- better to offer an option that might fail than to hide one that
+// would have worked.
+const visionModels = new Set();
+
+// The prompt is derived, not entered -- the same reasoning as the schema and
+// the tool definition, which are also fixed examples you read rather than
+// edit. This page shows the SHAPE of a request; the prompt is content, and
+// it's already visible in the snippet. Chat with model, one row up in the
+// menu, is where you bring your own wording.
+//
+// It follows whichever example is switched on, because the alternative made
+// nonsense of them: a greeting constrained to {city, temp_c}, or a weather
+// function the model has no reason to call.
+function syncPrompt() {
+  // A bare request has nothing to be about, so it stays a greeting; once an
+  // option brings an example along, the prompt comes from that scenario.
+  const carriesExample = state.image || state.json || state.tools;
+  state.prompt = carriesExample ? scenario().prompt : "Hello!";
+}
+let knowCapabilities = false;
+
+const state = {
+  api: "chat",
+  lang: "curl",
+  model: CONFIG.model || "ggml-org/Qwen3.6-27B-GGUF:Q8_0",
+  thinking: true,
+  stream: false,
+  json: false,
+  image: false,
+  tools: false,
+  prompt: "Hello!",
+};
+
+// --- fetch the real model list so the snippet is copy-paste runnable --------
+async function loadModels() {
+  const sel = document.getElementById("model");
+  try {
+    const r = await fetch(BASE + "/v1/models");
+    const models = (await r.json()).data;
+    // A model can take images only if a projector is configured for it, which
+    // the server reports as --mmproj in the launch args it would use. There's
+    // no capabilities field to read; this is the available signal, and it
+    // answers the right question -- not "could this architecture do vision"
+    // but "can this model accept an image right now".
+    models.forEach(m => {
+      if ((m.status?.args || []).includes("--mmproj")) visionModels.add(m.id);
+    });
+    // Only trust the signal if the field we read is actually there. status.args
+    // is an undocumented shape; if it ever goes away we'd otherwise conclude
+    // that no model supports vision and disable the option for all of them --
+    // silently removing a feature that works. Failing to "unknown" instead
+    // means the worst case is that we stop gating, which is recoverable by the
+    // server's own error message.
+    knowCapabilities = models.some(m => Array.isArray(m.status?.args));
+    const ids = models.map(m => m.id).sort();
+    sel.innerHTML = ids.map(id => `<option>${id}</option>`).join("");
+    if (ids.includes(state.model)) sel.value = state.model;
+    else state.model = sel.value;
+    // Success is silent: the dropdown already shows what's installed, and
+    // counting it back is noise.
+    document.getElementById("offline").hidden = true;
+  } catch {
+    sel.innerHTML = `<option>${state.model}</option>`;
+    // A failed fetch is opaque -- "nothing is listening" and "the browser
+    // blocked the response" throw the same error. Ask again in no-cors mode
+    // to tell them apart: that resolves (with a response we can't read)
+    // whenever something answers, and rejects only when nothing does.
+    let reachable = false;
+    try {
+      await fetch(BASE + "/v1/models", { mode: "no-cors" });
+      reachable = true;
+    } catch {}
+    if (reachable) {
+      // The server is up and refusing us on CORS grounds. In practice there's
+      // one cause: agent mode makes the server reflect only localhost origins,
+      // and this page is opened from a file:// URL, whose origin is `null`.
+      // Naming the setting is the difference between a dead end and a fix.
+      document.getElementById("offlineTitle").textContent =
+        "Agent mode is blocking this page";
+      document.getElementById("offlineDetail").textContent =
+        "Turn it off to use Send and the real model list. The snippet still copies.";
+    } else {
+      document.getElementById("offlineTitle").textContent =
+        "Can't reach the server";
+      document.getElementById("offlineDetail").textContent =
+        `Nothing is listening at ${BASE}. The model list is a placeholder and Send will fail; the snippet still copies.`;
+    }
+    document.getElementById("offline").hidden = false;
+  }
+  render();
+}
+
+// --- request body construction ---------------------------------------------
+// Each option maps to the parameter(s) it actually needs. This mapping is the
+// whole point of the tool: none of it is guessable from the OpenAI docs.
+
+// The examples come as a set. Each option carries one -- a prompt, a schema, a
+// tool -- and they have to describe the same situation or the request reads as
+// nonsense: an image prompt answered against a weather schema, or a weather
+// function with nothing to act on. So a scenario is picked first, and every
+// example is drawn from it.
+//
+// Which scenario: images if the request carries one, weather otherwise. Images
+// win because an image in the body is the more specific fact -- a weather
+// question can be asked about anything, but a picture has to be the subject.
+const SCENARIOS = {
+  weather: {
+    prompt: "What's the weather in Paris?",
+    schemaName: "weather",
+    schema: {
+      type: "object",
+      properties: { city: { type: "string" }, temp_c: { type: "number" } },
+      required: ["city", "temp_c"],
+    },
+    tool: {
+      name: "get_weather",
+      description: "Get the current weather for a city",
+      parameters: {
+        type: "object",
+        properties: { city: { type: "string" } },
+        required: ["city"],
+      },
+    },
+  },
+  image: {
+    prompt: "What is in this image?",
+    schemaName: "image_description",
+    schema: {
+      type: "object",
+      properties: {
+        description: { type: "string" },
+        main_colors: { type: "array", items: { type: "string" } },
+      },
+      required: ["description", "main_colors"],
+    },
+    tool: {
+      name: "tag_image",
+      description: "Attach descriptive labels to an image",
+      parameters: {
+        type: "object",
+        properties: { labels: { type: "array", items: { type: "string" } } },
+        required: ["labels"],
+      },
+    },
+  },
+};
+
+function scenario() {
+  return state.image ? SCENARIOS.image : SCENARIOS.weather;
+}
+
+// Verified to fetch and describe correctly end to end. Wikimedia was the
+// obvious source and is the wrong one: it 400s any request without a browser
+// user agent, so the server can't fetch it and the snippet fails when pasted.
+// This lives in the repo the engine itself comes from, so it's as stable as
+// the server is.
+const IMAGE_URL = "https://raw.githubusercontent.com/ggml-org/llama.cpp/master/media/llama0-logo.png";
+
+
+function buildBody() {
+  const b = { model: state.model };
+
+  if (state.api === "anthropic") {
+    // Anthropic shape: max_tokens is required, and thinking is its own object.
+    b.max_tokens = 1024;
+    b.messages = [{ role: "user", content: state.image
+      ? [{ type: "text", text: state.prompt },
+         { type: "image", source: { type: "url", url: IMAGE_URL } }]
+      : state.prompt }];
+    if (state.stream) b.stream = true;
+    // NOT `thinking: {type: "disabled"}` -- the server only acts on
+    // type == "enabled" and silently ignores "disabled". Of the thinking
+    // switches only chat_template_kwargs is passed through to this endpoint.
+    if (!state.thinking) b.chat_template_kwargs = { enable_thinking: false };
+    if (state.tools) b.tools = [{
+      name: scenario().tool.name,
+      description: scenario().tool.description,
+      input_schema: scenario().tool.parameters,
+    }];
+    return b;
+  }
+
+  if (state.api === "responses") {
+    b.input = state.image
+      ? [{ role: "user", content: [
+          { type: "input_text", text: state.prompt },
+          { type: "input_image", image_url: IMAGE_URL }] }]
+      : state.prompt;
+    if (state.stream) b.stream = true;
+    if (!state.thinking) b.reasoning = { effort: "none" };
+    if (state.tools) b.tools = [{ type: "function", ...scenario().tool }];
+    return b;
+  }
+
+  // OpenAI chat completions
+  b.messages = [{ role: "user", content: state.image
+    ? [{ type: "text", text: state.prompt },
+       { type: "image_url", image_url: { url: IMAGE_URL } }]
+    : state.prompt }];
+  if (state.stream) b.stream = true;
+  if (!state.thinking) {
+    // Two independent paths: reasoning_effort is the request-level switch,
+    // chat_template_kwargs reaches into the model's Jinja template. Some
+    // models honour only one, so the builder emits both.
+    b.reasoning_effort = "none";
+    b.chat_template_kwargs = { enable_thinking: false };
+  }
+  if (state.json) {
+    b.response_format = { type: "json_schema", json_schema: { name: scenario().schemaName, schema: scenario().schema } };
+  }
+  if (state.tools) b.tools = [{ type: "function", function: scenario().tool }];
+  return b;
+}
+
+function path() {
+  return { chat: "/v1/chat/completions", responses: "/v1/responses", anthropic: "/v1/messages" }[state.api];
+}
+
+
+function snippetCurl() {
+  const hdr = state.api === "anthropic"
+    ? `  -H "Content-Type: application/json" \\\n  -H "anthropic-version: 2023-06-01" \\\n`
+    : `  -H "Content-Type: application/json" \\\n`;
+  return `curl ${BASE}${path()} \\\n${hdr}  -d '${JSON.stringify(buildBody(), null, 2).split("\n").map((l,i)=> i===0?l:"  "+l).join("\n")}'`;
+}
+
+// Which client method to call and what to print, shared by the Python and
+// JavaScript snippets -- the OpenAI SDKs name these the same way.
+function openaiNames() {
+  return state.api === "responses"
+    ? { call: "client.responses.create", out: "response.output_text" }
+    : { call: "client.chat.completions.create", out: "response.choices[0].message" };
+}
+
+function snippetPython() {
+  if (state.api === "anthropic") {
+    return `import anthropic
+
+client = anthropic.Anthropic(base_url="${BASE}", api_key="no-key")
+
+message = client.messages.create(\n${pyArgs(buildBody(), "    ")}\n)
+print(message.content)`;
+  }
+  const { call, out } = openaiNames();
+  return `from openai import OpenAI
+
+client = OpenAI(base_url="${BASE}/v1", api_key="no-key")
+
+response = ${call}(\n${pyArgs(buildBody(), "    ")}\n)
+print(${out})`;
+}
+
+// Fields the Python SDKs don't declare as parameters. Passing one as a keyword
+// argument raises TypeError -- verified against openai 2.48 and anthropic
+// 0.122 -- so they go through extra_body, which is the documented channel for
+// sending fields the SDK doesn't know about. curl and the JavaScript SDKs take
+// them inline, so this split is Python's alone.
+const PY_EXTRA_BODY_KEYS = ["chat_template_kwargs"];
+
+function pyLiteral(v, indent) {
+  return JSON.stringify(v, null, 2)
+    .split("\n").map((l, i) => (i === 0 ? l : indent + l)).join("\n")
+    .replace(/\btrue\b/g, "True").replace(/\bfalse\b/g, "False").replace(/\bnull\b/g, "None");
+}
+
+// Render a body object as Python keyword arguments.
+function pyArgs(body, indent) {
+  const extra = {};
+  const lines = [];
+  for (const [k, v] of Object.entries(body)) {
+    if (PY_EXTRA_BODY_KEYS.includes(k)) extra[k] = v;
+    else lines.push(`${indent}${k}=${pyLiteral(v, indent)},`);
+  }
+  if (Object.keys(extra).length) {
+    lines.push(`${indent}extra_body=${pyLiteral(extra, indent)},`);
+  }
+  return lines.join("\n");
+}
+
+function snippetJs() {
+  if (state.api === "anthropic") {
+    return `import Anthropic from "@anthropic-ai/sdk";
+
+const client = new Anthropic({ baseURL: "${BASE}", apiKey: "no-key" });
+
+const message = await client.messages.create(${JSON.stringify(buildBody(), null, 2)});
+console.log(message.content);`;
+  }
+  const { call, out } = openaiNames();
+  return `import OpenAI from "openai";
+
+const client = new OpenAI({ baseURL: "${BASE}/v1", apiKey: "no-key" });
+
+const response = await ${call}(${JSON.stringify(buildBody(), null, 2)});
+console.log(${out});`;
+}
+
+// One pass, not a chain of replaces. A string is matched atomically by the
+// first branch, so nothing inside it can be seen by the number branch later --
+// which is what coloured the 6 in "Qwen3.6" and the digits in every id and
+// fingerprint. Escaping happens first, so model output can't inject markup.
+function highlight(text) {
+  const esc = text.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  return esc.replace(
+    /("(?:\\.|[^"\\])*")(\s*:)?|\b(true|false|null|True|False|None)\b|(-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b)/g,
+    (m, str, colon, lit, num) => {
+      if (str) {
+        return colon
+          ? `<span class="k">${str}</span><span class="p">${colon}</span>`
+          : `<span class="s">${str}</span>`;
+      }
+      if (lit || num) return `<span class="n">${lit || num}</span>`;
+      return m;
+    }
+  );
+}
+
+// Caveats the snippet itself can't express -- server flags, model support.
+function caveats() {
+  const c = [];
+  // No --jinja note: the app always starts the server with it, so tool calling
+  // works out of the box here (unlike a hand-rolled llama-server).
+  if (state.image) c.push("For a local file use <code>file://…</code> and start the server with <code>--media-path</code>.");
+  if (!state.thinking && state.api === "chat") c.push("Models differ: some honour <code>reasoning_effort</code>, others only <code>chat_template_kwargs</code>. Both are sent.");
+  if (!state.thinking && state.api === "anthropic") c.push("This endpoint ignores <code>thinking: {\"type\": \"disabled\"}</code> — <code>chat_template_kwargs</code> is the switch that works.");
+  if (state.stream) {
+    // Only chat completions terminates with [DONE]. The other two use named
+    // SSE events and end with their own terminal event -- checked against the
+    // server, not the docs.
+    c.push(state.api === "chat"
+      ? "Response arrives as SSE <code>data:</code> lines, terminated by <code>[DONE]</code>."
+      : state.api === "responses"
+        ? "Response arrives as SSE with named events, ending with <code>response.completed</code>."
+        : "Response arrives as SSE with named events, ending with <code>message_stop</code>.");
+  }
+  return c;
+}
+
+function currentSnippet() {
+  return { curl: snippetCurl, python: snippetPython, js: snippetJs }[state.lang]();
+}
+
+const OPTION_IDS = ["thinking", "stream", "json", "image", "tools"];
+
+// The markup owns each option's normal hint; an unavailable option borrows the
+// line to say why instead.
+const DEFAULT_HINTS = {};
+function optionEls(id) {
+  const box = document.getElementById(id);
+  const row = box.closest(".toggle");
+  return { box, row, hint: row.querySelector(".hint") };
+}
+OPTION_IDS.forEach(id => (DEFAULT_HINTS[id] = optionEls(id).hint.innerHTML));
+
+// Why an option can't be used right now, or null if it can. Two kinds of
+// reason, deliberately handled by one mechanism: the model may not be able to
+// (no vision projector) or the endpoint may not support it at all.
+//
+// Structured output really is chat-only -- /v1/responses ignores text.format
+// and /v1/messages ignores response_format, both verified against the server.
+// Before this it was silently dropped from the body on those endpoints while
+// the notes still promised grammar-enforced output.
+function unavailableReason(id) {
+  if (id === "image" && knowCapabilities && !visionModels.has(state.model)) {
+    return "this model has no vision projector";
+  }
+  if (id === "json" && state.api !== "chat") {
+    return "only on the OpenAI chat endpoint";
+  }
+  return null;
+}
+
+// Dims what can't be used, says why, and unticks anything that just became
+// unavailable -- otherwise switching model or endpoint would leave a request
+// that fails, or one that quietly ignores an option you can still see ticked.
+function applyAvailability() {
+  let cleared = false;
+  for (const id of OPTION_IDS) {
+    const { box, row, hint } = optionEls(id);
+    const reason = unavailableReason(id);
+    box.disabled = !!reason;
+    row.classList.toggle("unavailable", !!reason);
+    hint.innerHTML = reason || DEFAULT_HINTS[id];
+    if (reason && state[id]) {
+      state[id] = false;
+      box.checked = false;
+      cleared = true;
+    }
+  }
+  if (cleared) syncPrompt();
+}
+
+function render() {
+  applyAvailability();
+  document.getElementById("snippet").innerHTML = highlight(currentSnippet());
+  document.getElementById("endpointPath").textContent = path();
+  const c = caveats();
+  document.getElementById("caveat").innerHTML = c.length ? c.join("<br>") : "";
+}
+
+// --- wiring ----------------------------------------------------------------
+function seg(id, key) {
+  const el = document.getElementById(id);
+  el.addEventListener("click", e => {
+    const b = e.target.closest("button");
+    if (!b) return;
+    state[key] = b.dataset.v;
+    [...el.children].forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+    render();
+  });
+}
+seg("apiSeg", "api");
+seg("langSeg", "lang");
+
+["thinking", "stream", "json", "image", "tools"].forEach(id => {
+  document.getElementById(id).addEventListener("change", e => {
+    state[id] = e.target.checked;
+    syncPrompt();
+    render();
+  });
+});
+document.getElementById("model").addEventListener("change", e => {
+  state.model = e.target.value; render();
+});
+
+document.getElementById("copy").addEventListener("click", async e => {
+  await navigator.clipboard.writeText(currentSnippet());
+  e.target.textContent = "Copied";
+  setTimeout(() => (e.target.textContent = "Copy"), 1200);
+});
+
+// Actually run the request, so "does this model work" is answered in place.
+async function send() {
+  const panel = document.getElementById("response");
+  const body = document.getElementById("responseBody");
+  const status = document.getElementById("status");
+  panel.classList.add("show");
+  status.className = "status";
+  status.textContent = "";
+  // Progress shows inside the response block rather than in the header. It is
+  // transient, and a first request against an unloaded model can sit for many
+  // seconds -- long enough to read as broken if you came from a cloud API and
+  // the only sign of life is a caption at the far edge of a wide window. Here
+  // it's where the reply is about to land, which is where you're looking.
+  // Neutral until the watcher knows which phase it is: claiming "running"
+  // first would be wrong for the seconds a large model spends loading, and
+  // /v1/models is itself slower to answer while that happens.
+  let placeholder = true;
+  const progress = (text) => { if (placeholder) body.textContent = text; };
+  progress("sending…");
+  // A first request against an unloaded model spends most of its time loading
+  // weights, which can be many seconds and looks like a hang. The server
+  // reports load state per model, so say which of the two is happening --
+  // something a static note next to the button can't do.
+  let watching = true;
+  (async () => {
+    try {
+      while (watching) {
+        const r = await fetch(BASE + "/v1/models");
+        const m = (await r.json()).data.find(x => x.id === state.model);
+        if (!watching) return;
+        if (m?.status?.value === "loaded") {
+          progress("running…");
+          return;
+        }
+        progress("loading model…");
+        await new Promise(done => setTimeout(done, 1200));
+      }
+    } catch {
+      // The request itself reports failures; this is only a nicety.
+      progress("running…");
+    }
+  })();
+  // Bring the (previously hidden) response into view once, rather than
+  // following it as it streams -- one nudge on request, then it's the
+  // reader's page to scroll.
+  panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  const t0 = performance.now();
+  try {
+    const r = await fetch(BASE + path(), {
+      method: "POST",
+      // Exactly the headers the snippet shows -- anthropic-version only on
+      // the Anthropic endpoint. This server doesn't require it (the real
+      // Anthropic API does, which is why the snippet still carries it), but
+      // sending it on every request would mean Send and the displayed code
+      // disagree about what goes on the wire.
+      headers: state.api === "anthropic"
+        ? { "Content-Type": "application/json", "anthropic-version": "2023-06-01" }
+        : { "Content-Type": "application/json" },
+      body: JSON.stringify(buildBody()),
+    });
+    if (state.stream) {
+      const reader = r.body.getReader();
+      const dec = new TextDecoder();
+      let acc = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        placeholder = false;
+        acc += dec.decode(value, { stream: true });
+        // Plain text while it streams: re-highlighting the whole buffer on
+        // every chunk is quadratic, and the raw SSE lines are what the note
+        // above describes. Highlighted once it's complete.
+        body.textContent = acc;
+      }
+      body.innerHTML = highlight(acc);
+    } else {
+      placeholder = false;
+      body.innerHTML = highlight(JSON.stringify(await r.json(), null, 2));
+    }
+    watching = false;
+    status.textContent = `${r.status} · ${Math.round(performance.now() - t0)} ms`;
+  } catch (err) {
+    watching = false;
+    placeholder = false;
+    status.className = "status err";
+    status.textContent = "failed";
+    body.textContent = String(err) + "\n\nIs the server running on " + BASE + "?";
+  }
+}
+document.getElementById("send").addEventListener("click", send);
+
+document.getElementById("endpointBase").textContent = BASE;
+loadModels();
+</script>
+</body>
+</html>

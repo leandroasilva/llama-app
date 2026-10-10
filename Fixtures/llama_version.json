@@ -1,0 +1,17 @@
+{
+  "_comment": "LlamaVersion.parse(output) -> build number, or null. Shared corpus (Swift XCTest + cargo test). Expected values derived from Llama/Engine/LlamaVersion.swift.",
+  "cases": [
+    { "input": "b9370", "build": 9370 },
+    { "input": "b9370-aa50b2c2a", "build": 9370 },
+    { "input": "version: 0.5.0-dev (build 11200, commit 81bc6b83f)", "build": 11200 },
+    { "input": "b10398", "build": 10398 },
+    { "input": "9370", "build": 9370 },
+    { "input": "B42", "build": 42 },
+    { "input": "b9370 extra tokens after", "build": 9370 },
+    { "input": "garbage", "build": null },
+    { "input": "b", "build": null },
+    { "input": "   ", "build": null },
+    { "input": "", "build": null },
+    { "input": "(build )", "build": null }
+  ]
+}

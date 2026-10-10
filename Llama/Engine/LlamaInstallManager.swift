@@ -1,0 +1,196 @@
+import Foundation
+import os.log
+
+/// Owner of the app-managed CLI install. Holds the install `state` (changes are
+/// posted as `LBCLIInstallStateDidChange`) so the menu can surface a
+/// "setting up…" banner and a retry affordance, and drives `LlamaInstaller` off
+/// the UI.
+///
+/// The install itself is silent (no permission prompt): it writes only to
+/// `~/.llama-app` / `~/.local/bin`, needs no privilege escalation, and is part
+/// of the app's "it just works" setup -- but it's never opaque, hence the state.
+@MainActor
+final class LlamaInstallManager {
+  static let shared = LlamaInstallManager()
+
+  private let logger = Logger(subsystem: Logging.subsystem, category: "LlamaInstallManager")
+
+  enum State: Equatable {
+    /// Ready -- a usable binary is present (or we haven't needed to act).
+    case idle
+    /// Downloading/installing the app-managed binary.
+    case installing
+    /// The install failed; `message` is user-facing. Retry via `install()`.
+    case failed(message: String)
+    /// An unmanaged (e.g. Homebrew) binary is present but below `floorVersion`.
+    /// The app can't update it, so it nudges the user to do so. Non-blocking:
+    /// the server still runs, since the old binary often works.
+    case unmanagedTooOld(version: LlamaVersion)
+  }
+
+  private(set) var state: State = .idle {
+    didSet {
+      guard state != oldValue else { return }
+      NotificationCenter.default.post(name: .LBCLIInstallStateDidChange, object: self)
+    }
+  }
+
+  /// Version of the resolved binary in use, for display (e.g. the menu footer)
+  /// and for gating flags newer than `floorVersion` (`LlamaServer.hostArgument`).
+  /// Refreshed at launch and after an install -- both before the server starts
+  /// -- and nil until first read, when no binary is present, or when its
+  /// output can't be parsed.
+  private(set) var currentVersion: LlamaVersion?
+
+  /// Where the resolved binary comes from. Unmanaged installs are surfaced in
+  /// the footer (a "· brew" / "· ext" marker) so a stale version (and a no-op
+  /// "Check for Updates") is explained rather than mysterious.
+  private(set) var currentOrigin: LlamaBinaries.Origin = .managed
+
+  /// Ensures a usable `llama` binary is present -- installing one if none is
+  /// found -- then starts the server. Runs at launch and from the menu's setup
+  /// banner (retry a failed install, or re-check after a `brew upgrade`).
+  /// Install logic lives here rather than in `LlamaServer.start()`, which runs
+  /// on every model load and settings change.
+  ///
+  /// The server only starts once a binary is available; on a failed install
+  /// the menu shows the error and a retry, driven by `state`.
+  func startServerWhenReady() {
+    Task {
+      if await ensureReady() {
+        LlamaServer.shared.start()
+      }
+    }
+  }
+
+  /// Ensures a usable `llama` binary is available, applying the version policy:
+  /// install when missing, stage the pinned target in the background when the
+  /// managed binary trails it, or nudge when an unmanaged binary is below the
+  /// floor. Returns true if the server should start afterward (always, except a
+  /// failed install when no binary exists at all).
+  private func ensureReady() async -> Bool {
+    // Off the main thread: both the promotion and the version read touch the
+    // binary (the latter runs it).
+    let found = await Task.detached {
+      // Promote a binary staged by a previous session first -- the server isn't
+      // running yet, so swapping the live path here is trivially safe.
+      LlamaInstaller.promoteStaged(target: LlamaBinaries.targetVersion)
+      return LlamaBinaries.resolve().map {
+        (origin: $0.origin, version: LlamaBinaries.readVersion(at: $0.path))
+      }
+    }.value
+
+    guard let (origin, version) = found else { return await install() }
+    currentVersion = version
+    currentOrigin = origin
+
+    switch origin {
+    case .managed:
+      // The app manages this one -- keep it at the pinned target. A nil version
+      // (unreadable) fails open as ready, to avoid a reinstall loop.
+      state = .idle
+      if let version, version != LlamaBinaries.targetVersion {
+        // The old binary is still usable (floor <= it), so don't hold the
+        // server hostage to the download: report ready now and stage the new
+        // binary in the background. Before this, the first launch after an app
+        // update (which bumps the pinned target) had no server at all until
+        // the download finished -- a dead webui and erroring menu actions for
+        // as long as it took. Once staged, it's swapped in right away if
+        // nothing is loaded, else at the next launch (see `stageTargetVersion`).
+        stageTargetVersion()
+      }
+      return true
+
+    case .brew, .external:
+      // Can't touch an unmanaged install; nudge if below the floor but keep
+      // running (warn, not block).
+      if let version, version < LlamaBinaries.floorVersion {
+        state = .unmanagedTooOld(version: version)
+      } else {
+        state = .idle
+      }
+      return true
+    }
+  }
+
+  /// Whether a background staging download is running, so a re-entered
+  /// readiness check (the menu's re-check) doesn't start a second one.
+  private var isStaging = false
+
+  /// Downloads the pinned target to the staged path in the background. Silent:
+  /// the in-use binary keeps working either way, so a failure just logs -- the
+  /// next launch retries.
+  ///
+  /// When the download lands and no model is loaded (or loading), the staged
+  /// binary is promoted and the server restarted on it right away. The
+  /// download is small and starts at launch, so this is the common case, and a
+  /// restart with nothing loaded interrupts nothing. Restarting the whole
+  /// server (not just swapping the file) keeps the router and the model
+  /// instances it spawns on the same build. With a model loaded, a restart
+  /// would cut off whatever it's generating, so the swap waits for the next
+  /// launch instead, which promotes before the server starts (`ensureReady`).
+  private func stageTargetVersion() {
+    guard !isStaging else { return }
+    isStaging = true
+    Task {
+      do {
+        try await LlamaInstaller.install(version: LlamaBinaries.targetVersion.tag, staged: true)
+        if LlamaServer.shared.activeModelId == nil {
+          await applyStagedNow()
+        } else {
+          logger.info(
+            "Staged llama \(LlamaBinaries.targetVersion.tag, privacy: .public) for the next launch (a model is loaded)")
+        }
+      } catch {
+        let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        logger.error("Staging llama update failed: \(message, privacy: .public)")
+      }
+      isStaging = false
+    }
+  }
+
+  /// Promotes the staged binary and restarts the server on it. Renaming over
+  /// the live path is safe with the old server still running -- the process
+  /// keeps its already-open file; only new launches see the new one.
+  private func applyStagedNow() async {
+    let version = await Task.detached {
+      LlamaInstaller.promoteStaged(target: LlamaBinaries.targetVersion)
+      return LlamaBinaries.readVersion(at: LlamaBinaries.managedPath)
+    }.value
+    // Set before the restart: `LlamaServer.hostArgument` gates flags on it.
+    currentVersion = version
+    logger.info("Switched to llama \(version?.tag ?? "?", privacy: .public), restarting the server")
+    LlamaServer.shared.reload()
+  }
+
+  /// Installs (or reinstalls) the app-managed binary at the pinned target,
+  /// driving `state`. Also the retry entry point. Returns true on success.
+  @discardableResult
+  func install() async -> Bool {
+    state = .installing
+    do {
+      try await LlamaInstaller.install(version: LlamaBinaries.targetVersion.tag)
+      logger.info("Installed the app-managed llama CLI")
+      // Refresh before flipping to .idle so the rebuild triggered by the state
+      // change already reflects the freshly-installed version. The freshly
+      // installed binary is app-managed.
+      await refreshVersion()
+      currentOrigin = .managed
+      state = .idle
+      return true
+    } catch {
+      let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+      logger.error("CLI install failed: \(message, privacy: .public)")
+      state = .failed(message: message)
+      return false
+    }
+  }
+
+  /// Reads the in-use binary's version off the main thread and caches it.
+  private func refreshVersion() async {
+    currentVersion = await Task.detached {
+      guard let path = LlamaBinaries.llamaPath else { return nil }
+      return LlamaBinaries.readVersion(at: path)
+    }.value
+  }
+}

@@ -1,0 +1,347 @@
+import AppKit
+import Foundation
+
+/// Context length section of a model page.
+/// Shows a full-width segmented picker where every segment pairs a tier label
+/// with that tier's projected memory cost, so the context-length -> memory
+/// relationship is visible at a glance without per-tier rows. Selecting a
+/// tier updates user preferences and reloads the server if running.
+final class ExpandedModelDetailsView: ItemView {
+  private let model: Model
+  private unowned let server: LlamaServer
+
+  // Tiers backing the picker, in the order they appear (index = segment).
+  private var tiers: [ContextTier] = []
+  // Tiers actually runnable on this device; the rest render disabled.
+  private var enabledTiers: Set<ContextTier> = []
+  // One segment per tier, same order as `tiers`. Each is a two-line stack
+  // (tier label over memory cost) in a padded container whose layer draws the
+  // selection background.
+  private var segments: [(container: NSView, name: NSTextField, cost: NSTextField)] = []
+  // Hairline dividers between adjacent segments; divider[i] sits between
+  // segments i and i+1. Hidden when adjacent to the selected segment.
+  private var dividers: [NSView] = []
+  // Index of the currently selected tier in `tiers`.
+  private var selectedIdx = 0
+  // The segment row container -- outlined to give the picker a defined shape.
+  private var picker: NSStackView?
+
+  init(
+    model: Model,
+    server: LlamaServer
+  ) {
+    self.model = model
+    self.server = server
+    super.init(frame: .zero)
+    setupLayout()
+  }
+
+  required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+  // Disable hover highlight since this is an info container
+  override var highlightEnabled: Bool { false }
+
+  /// A single-line secondary label used in place of the context picker when
+  /// there's nothing to pick -- memory still estimating, estimation failed, or
+  /// the value is pinned in `models.user.ini`.
+  private func makeInfoLabel(_ text: String, toolTip: String? = nil) -> NSTextField {
+    let label = Theme.secondaryLabel()
+    label.stringValue = text
+    label.textColor = Theme.Colors.textSecondary
+    label.maximumNumberOfLines = 1
+    label.lineBreakMode = .byTruncatingTail
+    label.toolTip = toolTip
+    return label
+  }
+
+  private func setupLayout() {
+    let mainStack = NSStackView()
+    mainStack.orientation = .vertical
+    mainStack.alignment = .leading
+    mainStack.spacing = 4
+
+    // For sideloaded models awaiting their MemProfile, show a placeholder message
+    // instead of the picker (we don't have accurate memory estimates yet).
+    // For failed estimation (-1), show a failure message with the 4k fallback.
+    if model.ctxBytesPer1kTokens == 0 {
+      mainStack.addArrangedSubview(makeInfoLabel("Estimating memory requirements..."))
+    } else if model.ctxBytesPer1kTokens < 0 {
+      mainStack.addArrangedSubview(
+        makeInfoLabel("Could not estimate memory — using 4k context"))
+    } else if let overridden = UserModelOverrides.overriddenCtxSize(for: model.id) {
+      // A `ctx-size` in models.user.ini beats whatever the picker would pick,
+      // so showing the picker here would be a lie: the selection wouldn't
+      // match the running server, and clicking it would change nothing. Say
+      // where the value came from instead.
+      mainStack.addArrangedSubview(
+        makeInfoLabel(
+          "Context length \(Format.ctxOverride(overridden)) — set in \(UserModelOverrides.filename)",
+          toolTip:
+            "Remove ctx-size from \((UserModelOverrides.fileURL.path as NSString).abbreviatingWithTildeInPath) to use the picker again."
+        ))
+    } else {
+      // A "Context length" header, then the two-line segments below (tier
+      // label over its projected memory cost, so each segment self-describes
+      // the context -> memory tradeoff). Segments are custom-drawn instead
+      // of NSSegmentedControl: lighter visually, and immune to the
+      // inactive-window graying AppKit applies to standard controls when the
+      // app isn't frontmost (menu bar apps usually aren't).
+      // Show every tier the model natively supports; the ones this device
+      // can't fit in memory render disabled so the model's full range is
+      // still visible.
+      tiers = model.displayContextTiers
+      enabledTiers = Set(model.supportedContextTiers)
+      // Fall back to the first supported tier if no effective tier is resolved.
+      let effectiveTier = model.effectiveCtxTier ?? tiers.first ?? .k4
+      selectedIdx = tiers.firstIndex(of: effectiveTier) ?? 0
+
+      let picker = NSStackView()
+      picker.orientation = .horizontal
+      // 1px gap on either side of each divider so the selected segment's
+      // background reaches almost to the neighboring dividers.
+      picker.spacing = 1
+      picker.distribution = .fillEqually
+      // Subtle outline around the whole row to give the picker a defined shape.
+      picker.wantsLayer = true
+      picker.layer?.borderWidth = 1
+      picker.layer?.cornerRadius = 6
+      // 2px insets all around so the selected segment's background keeps the
+      // same breathing room from the outline at the ends as it does
+      // vertically.
+      picker.edgeInsets = NSEdgeInsets(top: 2, left: 2, bottom: 2, right: 2)
+      self.picker = picker
+      for (idx, tier) in tiers.enumerated() {
+        if idx > 0 {
+          picker.addArrangedSubview(makeDivider())
+        }
+        let segment = makeSegment(tier: tier)
+        // Enabled tiers show their memory cost inline (see the sublabel in
+        // `makeSegment`), so they need no tooltip. Disabled tiers still get one
+        // to explain why they can't be selected -- info shown nowhere else.
+        if !enabledTiers.contains(tier) {
+          segment.toolTip = disabledReason(for: tier)
+        }
+        picker.addArrangedSubview(segment)
+      }
+      restyleSegments()
+
+      // The header doubles as a legend for each segment's two lines: "Context
+      // length" in the tier labels' tint, "memory use" dimmer like the cost
+      // sublabels, so the word-to-line pairing carries the meaning without a
+      // separate caption.
+      let header = Theme.secondaryLabel()
+      let headerText = NSMutableAttributedString(
+        string: "Context length",
+        attributes: [
+          .font: Theme.Fonts.secondary,
+          .foregroundColor: Theme.Colors.modelIconTint,
+        ])
+      headerText.append(NSAttributedString(
+        string: " · memory use",
+        attributes: [
+          .font: Theme.Fonts.secondary,
+          .foregroundColor: Theme.Colors.textTertiary,
+        ]))
+      header.attributedStringValue = headerText
+
+      // A `?` next to the header answers the recurring newcomer question of
+      // what picking a size actually does -- without changing the "Context
+      // length" term itself (renaming would only confuse the many users who
+      // already know it). The tooltip carries the honest answer to all three
+      // things people ask: the memory is reserved on load, it's a hard ceiling,
+      // and bigger costs more. Hover-only, so it's invisible to those who
+      // already understand it. A tooltip (not an NSPopover) because this view is
+      // hosted in the menu, whose event tracking a popover would fight.
+      let info = NSImageView(
+        image: NSImage(
+          systemSymbolName: "questionmark.circle",
+          accessibilityDescription: "What is context length?") ?? NSImage())
+      info.contentTintColor = Theme.Colors.textTertiary
+      info.symbolConfiguration = .init(pointSize: 11, weight: .regular)
+      info.toolTip = """
+        How much of the conversation the model can remember at once. Bigger \
+        sizes remember more, but use more memory and run a little slower.
+
+        The memory shown is reserved while the model is loaded. Once a \
+        conversation grows past the limit, it no longer fits -- you'll need a \
+        larger size or a fresh conversation.
+        """
+
+      // Header text and the `?` on one line, left-aligned and snug together.
+      let headerRow = NSStackView(views: [header, info])
+      headerRow.orientation = .horizontal
+      headerRow.alignment = .centerY
+      headerRow.spacing = 4
+      mainStack.addArrangedSubview(headerRow)
+      mainStack.addArrangedSubview(picker)
+      // The picker spans the full content width, with segments sharing it
+      // equally (fillEqually above) so the costs read as a table column.
+      picker.widthAnchor.constraint(equalToConstant: Layout.contentWidth).isActive = true
+
+      // No caption explaining the dimmed segments: hovering the one you're
+      // wondering about is the natural move, and its tooltip can name that
+      // tier's own numbers instead of a general rule you'd have to apply
+      // yourself. A caption would charge every model page, forever, for a
+      // fact you only need once.
+    }
+
+    contentView.addSubview(mainStack)
+    mainStack.pinToSuperview(top: 4, leading: 0, trailing: 0, bottom: 6)
+
+    // Pin to the standard menu width so a long label (e.g. the "Could not estimate
+    // memory" fallback) can't widen the whole menu beyond what model rows use.
+    widthAnchor.constraint(equalToConstant: Layout.menuWidth).isActive = true
+  }
+
+  // MARK: - Tier Picker
+
+  /// The segment sublabel: this tier's projected memory. One decimal under
+  /// 10 GB, whole numbers above -- the decimal stops being meaningful and the
+  /// narrow form keeps 7-tier pickers within the menu width.
+  private func costLabel(for tier: ContextTier) -> String {
+    gbLabel(mb: Double(model.runtimeMemoryUsageMb(ctxWindowTokens: Double(tier.rawValue))))
+  }
+
+  /// Renders binary megabytes as gigabytes the way the segments do, so the
+  /// budget quoted in a tooltip is directly comparable to the per-tier costs
+  /// on screen.
+  private func gbLabel(mb: Double) -> String {
+    let gb = mb / 1024.0
+    let number = gb < 10 ? String(format: "%.1f", gb) : String(format: "%.0f", gb.rounded())
+    return number + " GB"
+  }
+
+  /// Tooltip for a dimmed segment. Runnable tiers get none -- their cost
+  /// sublabel already says everything, and a tooltip on the ordinary case is
+  /// noise.
+  ///
+  /// Names the machine rather than our budget. The segment already shows what
+  /// the size costs, and the budget (working set less a margin for macOS) is a
+  /// number nobody recognizes -- quoting it just moves the question from "why
+  /// is this dimmed" to "why 11 and not 16". The Mac's own size is the one
+  /// figure the reader already knows.
+  private func disabledReason(for tier: ContextTier) -> String? {
+    let memoryMb = Double(SystemMemory.memoryMb)
+    guard memoryMb > 0 else {
+      return model.incompatibilitySummary(ctxWindowTokens: Double(tier.rawValue))
+    }
+    return "Too large for a \(gbLabel(mb: memoryMb)) Mac."
+  }
+
+  /// Creates one clickable segment: the tier label over its memory cost,
+  /// centered in a rounded-corner container that draws the selection
+  /// background.
+  private func makeSegment(tier: ContextTier) -> NSView {
+    let name = Theme.secondaryLabel(tier.shortLabel)
+    let cost = Theme.secondaryLabel(costLabel(for: tier))
+    // A step smaller than the tier label so the cost reads as its sublabel.
+    cost.font = NSFont.systemFont(ofSize: 9)
+
+    let column = NSStackView(views: [name, cost])
+    column.orientation = .vertical
+    column.alignment = .centerX
+    column.spacing = 0
+
+    let container = NSView()
+    container.wantsLayer = true
+    container.layer?.cornerRadius = 4
+    container.translatesAutoresizingMaskIntoConstraints = false
+    column.translatesAutoresizingMaskIntoConstraints = false
+    container.addSubview(column)
+    NSLayoutConstraint.activate([
+      column.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+      // Keep the two-line column from widening a segment past its equal share.
+      column.leadingAnchor.constraint(greaterThanOrEqualTo: container.leadingAnchor),
+      column.topAnchor.constraint(equalTo: container.topAnchor, constant: 2),
+      column.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -2),
+    ])
+
+    let click = NSClickGestureRecognizer(target: self, action: #selector(didClickSegment(_:)))
+    container.addGestureRecognizer(click)
+    segments.append((container, name, cost))
+    return container
+  }
+
+  /// Creates a hairline divider that visually splits the gap between two
+  /// unselected segments (the gap otherwise reads as double the edge padding).
+  private func makeDivider() -> NSView {
+    let divider = NSView()
+    divider.wantsLayer = true
+    divider.translatesAutoresizingMaskIntoConstraints = false
+    divider.widthAnchor.constraint(equalToConstant: 1).isActive = true
+    divider.heightAnchor.constraint(equalToConstant: 16).isActive = true
+    dividers.append(divider)
+    return divider
+  }
+
+  /// Applies selected/unselected styling to every segment: the selected tier
+  /// gets a subtle background and primary text, the rest plain secondary text.
+  /// Also recolors the dividers, hiding those adjacent to the selection.
+  private func restyleSegments() {
+    picker?.layer?.setBorderColor(Theme.Colors.separator, in: self)
+    for (idx, segment) in segments.enumerated() {
+      let selected = idx == selectedIdx
+      let enabled = enabledTiers.contains(tiers[idx])
+      // Disabled tiers use the faint tertiary gray; enabled-but-unselected
+      // ones use the darker icon tint (not textSecondary -- it's too close to
+      // tertiary for the available/unavailable distinction to read).
+      segment.name.textColor =
+        !enabled
+        ? Theme.Colors.textTertiary
+        : selected ? Theme.Colors.textPrimary : Theme.Colors.modelIconTint
+      // The cost line always sits one visual step below its tier label so the
+      // tier stays the anchor of each segment.
+      segment.cost.textColor =
+        !enabled
+        ? Theme.Colors.textTertiary
+        : selected ? Theme.Colors.textSecondary : Theme.Colors.textTertiary
+      segment.container.layer?.setBackgroundColor(
+        selected ? Theme.Colors.subtleBackground : .clear, in: self)
+    }
+    // Hide (via clear color, to keep layout stable) the dividers touching the
+    // selected segment -- its background already delimits those gaps.
+    for (idx, divider) in dividers.enumerated() {
+      let adjacentToSelection = idx == selectedIdx || idx + 1 == selectedIdx
+      divider.layer?.setBackgroundColor(
+        adjacentToSelection ? .clear : Theme.Colors.separator, in: self)
+    }
+  }
+
+  // Layer colors are resolved CGColors, so re-resolve them when the system
+  // appearance flips between light and dark.
+  override func viewDidChangeEffectiveAppearance() {
+    super.viewDidChangeEffectiveAppearance()
+    restyleSegments()
+  }
+
+  // MARK: - Actions
+
+  @objc private func didClickSegment(_ sender: NSClickGestureRecognizer) {
+    guard let container = sender.view,
+      let idx = segments.firstIndex(where: { $0.container == container })
+    else { return }
+    let tier = tiers[idx]
+
+    // Ignore clicks on tiers this device can't run.
+    guard enabledTiers.contains(tier) else { return }
+
+    // Reflect the new selection right away.
+    selectedIdx = idx
+    restyleSegments()
+
+    // Skip the rest if this is already the active tier.
+    guard tier != model.effectiveCtxTier else { return }
+
+    // Save the new preference
+    UserSettings.setSelectedCtxTier(tier, for: model.id)
+
+    // Regenerate models.ini and reload server
+    ModelManager.shared.updateModelsFile()
+
+    // If this model is running, restart the server to apply the new context size
+    if server.isActive(model: model) {
+      server.reload()
+    }
+  }
+
+}

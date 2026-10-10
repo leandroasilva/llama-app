@@ -1,0 +1,9 @@
+//! `llama-core` — the logic core of the Llama macOS app, migrated from Swift.
+//!
+//! This crate holds pure and near-pure logic only. It never touches AppKit,
+//! SwiftUI, UserDefaults, or Metal; those stay in the Swift host and are
+//! injected through `llama-core-ffi`. See `MIGRACAO_RUST_REVIEW.md` for the
+//! migration plan and the FFI contract.
+
+pub mod engine;
+pub mod hf;

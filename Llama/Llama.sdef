@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE dictionary SYSTEM "file://localhost/System/Library/DTDs/sdef.dtd">
+<dictionary title="Llama Terminology">
+    <suite name="Llama Suite" code="LBrn" description="Llama specific classes and commands.">
+        <command name="show settings" code="LBrnSett" description="Open the settings window.">
+            <cocoa class="Llama.ShowSettingsCommand"/>
+            <parameter name="tab" code="LBtb" type="text" optional="yes" description="Which section to select, by its sidebar name (e.g. &quot;Network&quot;). Omitted, the window keeps whatever was last selected.">
+                <cocoa key="tab"/>
+            </parameter>
+        </command>
+        <command name="show menu" code="LBrnShMn" description="Open the menu bar menu. While the menu is open the app can't take script commands, so don't send this to an open menu: it waits until the menu closes, then reopens it.">
+            <cocoa class="Llama.ShowMenuCommand"/>
+        </command>
+        <command name="show global input" code="LBrnGinp" description="Open the global-input capture panel.">
+            <cocoa class="Llama.ShowGlobalInputCommand"/>
+        </command>
+    </suite>
+</dictionary>

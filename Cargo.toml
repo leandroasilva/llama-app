@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["llama-core", "llama-core-ffi"]
+
+# Standard release tuning for a staticlib that is linked into a signed app.
+# `panic` is left as the default (unwind) on purpose: the FFI boundary wraps
+# every call in `catch_unwind`, which is only effective with unwinding. Using
+# panic=abort here would turn a caught panic into a process abort.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true

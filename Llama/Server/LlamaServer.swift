@@ -1,0 +1,896 @@
+import Foundation
+import os.log
+
+/// Essential errors that can occur during llama-server operations
+enum LlamaServerError: Error, LocalizedError, Equatable {
+  case launchFailed(String)
+  case invalidPath(String)
+  case portInUse(port: Int, by: String)
+
+  var errorDescription: String? {
+    switch self {
+    case .launchFailed(let reason):
+      return "Failed to start server: \(reason)"
+    case .invalidPath(let path):
+      return "Invalid file: \(path)"
+    case .portInUse(let port, let by):
+      return "Port \(port) is in use by \(by)"
+    }
+  }
+}
+
+/// Manages the llama-server binary process lifecycle and health monitoring.
+///
+/// The server runs *continuously*: it's started once at app launch (see
+/// `ensureCLIThenStartServer` in `LlamaApp`) and stays up in router mode to host
+/// the webui and serve requests even with no model loaded -- models load/unload
+/// in-place, the process doesn't. So callers can assume it's running; don't add
+/// "start it if it's down" logic to open the webui or reach an endpoint.
+@MainActor
+class LlamaServer {
+  /// Singleton instance for app-wide server management
+  static let shared = LlamaServer()
+
+  /// Default port the server listens on. llama.cpp is moving its own default
+  /// from 8080 to 9931 (it already warns about the change on 8080); we move
+  /// ahead of it so URLs the app prints line up with a plain `llama serve`,
+  /// and so the switch breaks as few users as possible.
+  nonisolated static let defaultPort = 9931
+
+  /// The effective port: the user's override if set, else the default.
+  nonisolated static var port: Int { UserSettings.serverPort ?? defaultPort }
+
+  /// Whether `port` is free to bind on localhost right now. Used to validate a
+  /// user-chosen port before saving it, so a conflict is caught at the point of
+  /// the action rather than as an opaque server failure later. (Best-effort:
+  /// the port could still get taken between this check and the server binding.)
+  nonisolated static func isPortAvailable(_ port: Int) -> Bool {
+    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    guard fd >= 0 else { return true }  // can't probe -- don't block the user
+    defer { close(fd) }
+
+    var addr = sockaddr_in()
+    addr.sin_family = sa_family_t(AF_INET)
+    addr.sin_port = in_port_t(port).bigEndian
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+
+    // No SO_REUSEADDR: we want bind to fail if something already holds the port.
+    let result = withUnsafePointer(to: &addr) {
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+        bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+      }
+    }
+    return result == 0
+  }
+
+  /// The address the server will actually bind, which is the configured one
+  /// only while the machine still holds it.
+  ///
+  /// A specific address can stop existing between launches -- Tailscale logged
+  /// out, a VPN down, a hand-set IP from another network. `llama serve` would
+  /// fail to bind and the app would look broken, for a setting the user can't
+  /// see is now stale. Falling back to loopback keeps the server working, and
+  /// it fails in the safe direction: less reachable than asked for, never
+  /// more. It's also self-healing -- the address comes back, the next start
+  /// uses it again.
+  ///
+  /// `0.0.0.0` isn't an interface address and always binds, so it's taken as-is.
+  nonisolated static var effectiveBindAddress: String? {
+    guard let configured = UserSettings.networkBindAddress else { return nil }
+    guard configured != "0.0.0.0" else { return configured }
+    guard LocalNetwork.ipv4Addresses().values.contains(configured) else {
+      logger.notice("configured bind address is not on any interface -- using loopback")
+      return nil
+    }
+    return configured
+  }
+
+  /// The custom web app folder the server will actually serve, which is the
+  /// configured one only while it still has an `index.html`.
+  ///
+  /// Same reasoning as `effectiveBindAddress`: a folder can be moved or
+  /// deleted between launches, and `llama serve --path` on a missing folder
+  /// would leave `/` answering 404 -- a chat that's just gone, for a setting
+  /// the user can't see is now stale. Falling back to the built-in UI keeps a
+  /// working chat, and it's self-healing: put the folder back and the next
+  /// start serves it again.
+  nonisolated static var effectiveWebUIDirectory: String? {
+    guard let dir = UserSettings.customWebUIDirectory else { return nil }
+    guard hasIndexPage(dir) else {
+      logger.notice("custom web app folder has no index.html -- using the built-in web UI")
+      return nil
+    }
+    return dir.path
+  }
+
+  /// Whether `dir` has the `index.html` the server hands out for `/`. The
+  /// server serves files as-is, with no fallback page, so a folder without one
+  /// would answer every visit to the root with a 404.
+  nonisolated static func hasIndexPage(_ dir: URL) -> Bool {
+    FileManager.default.fileExists(atPath: dir.appendingPathComponent("index.html").path)
+  }
+
+  /// Returns the host string for server URLs.
+  /// If network bind address is set, uses that (resolving 0.0.0.0 to the actual local IP).
+  /// Otherwise defaults to "localhost".
+  static var resolvedHost: String {
+    if let bindAddr = effectiveBindAddress {
+      return bindAddr == "0.0.0.0"
+        ? (LocalNetwork.ipAddress() ?? "0.0.0.0")
+        : bindAddr
+    }
+    return "localhost"
+  }
+
+  /// The host the app itself should use to reach the server.
+  ///
+  /// Unlike `resolvedHost` (which produces a URL for *other* devices), this is
+  /// about reachability from this machine. With a specific address configured,
+  /// loopback is only bound too when the engine is new enough (`hostArgument`),
+  /// but the specific address is bound either way -- so the app talks to that,
+  /// which keeps this independent of the engine version. `0.0.0.0` already
+  /// includes loopback, so localhost stays the cheapest way in.
+  nonisolated static var localHost: String {
+    guard let bindAddr = effectiveBindAddress, bindAddr != "0.0.0.0" else { return "localhost" }
+    return bindAddr
+  }
+
+  /// Webui URL with the given model preselected via the `?model=` query param
+  /// the webui reads. Uses the resolved host so a custom network bind address
+  /// (incl. 0.0.0.0 -> local IP) still works.
+  ///
+  /// `?load=true` makes the webui load the model on arrival instead of waiting
+  /// for the first message -- without it, picking a model in the app opens a
+  /// page that looks idle until you send something. Landed in engine b10318;
+  /// older builds ignore the unknown param, so passing it is safe below the pin.
+  static func webuiUrl(modelId: String) -> URL? {
+    var components = URLComponents()
+    components.scheme = "http"
+    components.host = resolvedHost
+    components.port = port
+    components.path = "/"
+    components.queryItems = [
+      URLQueryItem(name: "model", value: modelId),
+      URLQueryItem(name: "load", value: "true"),
+    ]
+    return components.url
+  }
+
+  private var outputPipe: Pipe?
+  private var errorPipe: Pipe?
+  private var activeProcess: Process?
+  /// Bumped by every `start()`/`stop()`. `start()` runs its port-freeing
+  /// pre-flight off the main actor, then compares this token before launching so
+  /// a newer `start()`/`stop()` issued meanwhile wins (the older pre-flight bails).
+  private var startGeneration = 0
+  /// The most recent `start()` pre-flight. Each new pre-flight chains onto this
+  /// one so their `reclaimPort()` scans never overlap -- otherwise a superseded
+  /// pre-flight's scan could kill the server a newer pre-flight just launched.
+  private var startTask: Task<Void, Never>?
+  private var healthCheckTask: Task<Void, Error>?
+  private let logger = Logger(subsystem: Logging.subsystem, category: "LlamaServer")
+  /// Static counterpart, for the type-level helpers (bind-address resolution).
+  nonisolated private static let logger = Logger(
+    subsystem: Logging.subsystem, category: "LlamaServer")
+  private let api = LlamaServerAPI()
+
+  enum ServerState: Equatable {
+    case idle
+    case loading
+    case running
+    case error(LlamaServerError)
+  }
+
+  var state: ServerState = .idle {
+    didSet { NotificationCenter.default.post(name: .LBServerStateDidChange, object: self) }
+  }
+  var modelStatuses: [String: ModelLoadState] = [:] {
+    didSet { NotificationCenter.default.post(name: .LBModelStatusDidChange, object: self) }
+  }
+  /// The ID of the currently active model, derived from `modelStatuses`.
+  /// A model counts as active while it's loaded or in the process of loading.
+  /// `--models-max 1` guarantees at most one such model.
+  var activeModelId: String? {
+    modelStatuses.first { $0.value == .loaded || $0.value == .loading }?.key
+  }
+  // Store observer token for proper cleanup
+  private var settingsObserver: NSObjectProtocol?
+
+  init() {
+    // Listen for settings changes to reload server if needed (e.g. sleep timer)
+    settingsObserver = NotificationCenter.default.addObserver(
+      forName: .LBUserSettingsDidChange, object: nil, queue: .main
+    ) {
+      [weak self] _ in
+      MainActor.assumeIsolated {
+        self?.reload()
+      }
+    }
+  }
+
+  deinit {
+    if let settingsObserver {
+      NotificationCenter.default.removeObserver(settingsObserver)
+    }
+  }
+
+  private func attachOutputHandlers(for process: Process) {
+    guard let outputPipe = process.standardOutput as? Pipe,
+      let errorPipe = process.standardError as? Pipe
+    else { return }
+
+    self.outputPipe = outputPipe
+    self.errorPipe = errorPipe
+
+    setHandler(for: outputPipe) { message in
+      self.logger.info("llama-server: \(message, privacy: .public)")
+    }
+
+    setHandler(for: errorPipe) { message in
+      self.logger.error("llama-server error: \(message, privacy: .public)")
+      self.notePresetRejection(in: message)
+    }
+  }
+
+  /// The option name the server last refused, if any (e.g. `temperture`).
+  ///
+  /// Only user overrides can produce this -- the app's own keys are generated
+  /// from a fixed set -- so capturing it turns an opaque "Process crashed" into
+  /// the name of the key to fix.
+  private var rejectedOption: String?
+
+  /// Records `option 'x' not recognized in preset 'y'` from the server's stderr.
+  ///
+  /// `llama serve` rejects the whole preset file over one unknown option, so
+  /// this is fatal for every model, not just the section that carries it. It
+  /// surfaces two ways -- as a startup failure when the process boots with the
+  /// bad file, and as a 500 from the in-place reload when the file changes
+  /// under a running server -- and the wording is identical, so one match
+  /// covers both.
+  ///
+  /// Keeps only the option name. The server's full sentence names the preset
+  /// too, which is jargon the app never shows and makes for a hint too wide to
+  /// read; the whole line is already in the log for anyone debugging.
+  private func notePresetRejection(in message: String) {
+    for line in message.components(separatedBy: .newlines)
+    where line.contains("not recognized in preset") {
+      guard let start = line.range(of: "option '"),
+        let end = line[start.upperBound...].firstIndex(of: "'")
+      else { continue }
+      rejectedOption = String(line[start.upperBound..<end])
+    }
+  }
+
+  /// Drops user overrides and restarts, when the server rejected a user key.
+  ///
+  /// Returns whether recovery was started, so callers can fall through to their
+  /// normal failure handling when this wasn't an override problem. Guarded on
+  /// `isSuspended` so a second failure reports honestly instead of looping.
+  @discardableResult
+  private func recoverFromPresetRejection() -> Bool {
+    guard let option = rejectedOption, !UserModelOverrides.isSuspended else { return false }
+
+    rejectedOption = nil
+    UserModelOverrides.suspend(dueTo: option)
+    logger.error("Suspending user overrides -- unknown option '\(option, privacy: .public)'")
+    ModelManager.shared.updateModelsFile()
+    // No transient notice here: the menu carries a standing row for as long as
+    // overrides stay suspended, which is the honest shape for a state that
+    // persists until the user edits the file.
+    start()
+    return true
+  }
+
+  private func setHandler(for pipe: Pipe, logMessage: @escaping (String) -> Void) {
+    pipe.fileHandleForReading.readabilityHandler = { fileHandle in
+      let data = fileHandle.availableData
+      guard !data.isEmpty else {
+        fileHandle.readabilityHandler = nil
+        return
+      }
+
+      guard let output = String(data: data, encoding: .utf8) else { return }
+      logMessage(output.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+  }
+
+  /// A fully-resolved description of the `llama serve` invocation: the binary
+  /// path, its arguments, and the env vars we layer on top of the inherited
+  /// environment. `start()` builds one of these and runs it; the settings UI
+  /// renders one as a shell command so users can see exactly what's launched
+  /// (and so changing a setting visibly changes the command).
+  struct LaunchSpec {
+    let executablePath: String
+    let arguments: [String]
+    /// How many trailing elements of `arguments` came from the user's
+    /// `extraServerArgs` default. Purely presentational: `displayCommand`
+    /// renders them on their own commented line so a reader can tell custom
+    /// arguments from app-managed ones.
+    let extraArgCount: Int
+    /// Only the env vars *we* set -- not the full inherited environment.
+    let env: [(key: String, value: String)]
+
+    /// A reading-friendly rendering of the command: the env vars as plain
+    /// `export` statements up top (each flush-left on its own line), a blank
+    /// line, then the invocation -- the binary and subcommand on one line, with
+    /// each `--flag` (grouped with its value) hanging-indented below. Paths are
+    /// shown literally and shell-quoted where needed, so the block stays
+    /// paste-and-run correct and shows exactly what runs.
+    var displayCommand: String {
+      // Group the app-managed arguments so a `--flag` carries its following
+      // value(s) on one line; bare positional args (like `serve`) stand alone.
+      // User-supplied extra args (the trailing `extraArgCount` elements) are
+      // handled separately below.
+      let managed = arguments.dropLast(extraArgCount)
+      var lines: [String] = []
+      var idx = managed.startIndex
+      while idx < managed.endIndex {
+        let arg = managed[idx]
+        let next = managed.index(after: idx)
+        if arg.hasPrefix("-"), next < managed.endIndex,
+          !managed[next].hasPrefix("-")
+        {
+          lines.append("\(arg) \(Self.quote(managed[next]))")
+          idx = managed.index(after: next)
+        } else {
+          lines.append(Self.quote(arg))
+          idx = next
+        }
+      }
+
+      // The binary leads the command line. Any leading positional args (the
+      // subcommand, e.g. `serve`) ride on that same line -- `llama serve` reads
+      // as one unit -- and the flags follow, one per line.
+      var firstLine = Self.quote(executablePath)
+      while let head = lines.first, !head.hasPrefix("-") {
+        firstLine += " " + head
+        lines.removeFirst()
+      }
+
+      // User-supplied extra args: all on one line, tagged with a comment so a
+      // reader can tell them apart from the app's own flags. Appended after
+      // the positional-absorption loop above so the loop can't swallow them,
+      // and safe only because this is the *last* line -- a `#` comment would
+      // swallow a trailing `\` continuation on any earlier line.
+      if extraArgCount > 0 {
+        let extra = arguments.suffix(extraArgCount).map(Self.quote).joined(separator: " ")
+        lines.append("\(extra)  # custom arguments")
+      }
+
+      // Env vars as standalone `export` statements -- each flush-left on its
+      // own line, no continuation backslash, so the setup reads as a calm list
+      // separate from the invocation below.
+      let exportLines = env.map { "export \($0.key)=\(Self.quote($0.value))" }
+
+      // The invocation: binary + subcommand on the first line, each flag
+      // hanging-indented below, joined by " \<newline>" so it stays runnable.
+      let cmdLines = [firstLine] + lines
+      let cmdBlock = cmdLines.enumerated().map { i, line in
+        let prefix = i == 0 ? "" : "  "
+        let suffix = i == cmdLines.count - 1 ? "" : " \\"
+        return prefix + line + suffix
+      }.joined(separator: "\n")
+
+      // A blank line sets the exports apart from the command they precede
+      // (no exports -> no leading blank line).
+      return (exportLines.isEmpty ? [cmdBlock] : exportLines + ["", cmdBlock])
+        .joined(separator: "\n")
+    }
+
+    /// Minimal shell quoting: wraps a token in single quotes only if it
+    /// contains characters that the shell would otherwise treat specially.
+    private static func quote(_ s: String) -> String {
+      guard s.contains(where: { !$0.isLetter && !$0.isNumber && !"-_./=:".contains($0) })
+      else { return s }
+      return "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+  }
+
+  /// An empty dir pointed at by `LLAMA_CACHE` to suppress router mode's
+  /// automatic model discovery. Without it, llama-server scans the cache and
+  /// lists every GGUF it finds; we manage the model list ourselves via
+  /// `--models-preset`. A fixed `/tmp` path keeps the rendered command short.
+  nonisolated static let emptyCachePath = "/tmp/llama-empty-cache"
+
+  /// Where the server writes its log (`--log-file`). `~/Library/Logs/<App>` is
+  /// the macOS convention for app logs, and Console.app lists `.log` files there
+  /// under Log Reports, so users can find it without the Settings button. Named
+  /// like `appSupportDir`, so dev and production builds share it the same way.
+  /// llama.cpp truncates the file on every start, so it only ever holds the
+  /// current server session.
+  nonisolated static let logFilePath = FileManager.default
+    .urls(for: .libraryDirectory, in: .userDomainMask)[0]
+    .appendingPathComponent("Logs/Llama/llama-server.log").path
+
+  /// The `--host` value for a network bind address.
+  ///
+  /// `llama serve` listens only on the addresses it's given, so binding a
+  /// specific one (Tailscale, or a hand-set IP) would otherwise take loopback
+  /// away -- `localhost:<port>`, which most OpenAI-compatible clients default
+  /// to, would stop answering even on this Mac, and start answering again
+  /// whenever the address went away and we fell back to loopback. Listing
+  /// loopback alongside keeps localhost working in every mode.
+  ///
+  /// Only engines from `multiHostVersion` on accept a list; older ones (and an
+  /// unreadable version) get the single address, as before. `0.0.0.0` already
+  /// covers loopback, and repeating `127.0.0.1` would fail the second bind.
+  private static func hostArgument(for bindAddress: String) -> String {
+    guard bindAddress != "0.0.0.0", bindAddress != "127.0.0.1",
+      let version = LlamaInstallManager.shared.currentVersion,
+      version >= LlamaBinaries.multiHostVersion
+    else { return bindAddress }
+    return "127.0.0.1,\(bindAddress)"
+  }
+
+  /// Builds the `llama serve` launch spec from the current settings. Pure with
+  /// respect to process state -- it only reads settings, the resolved binary
+  /// path and its version -- so the settings UI can call it to preview the
+  /// command. Returns nil only when no llama binary is installed.
+  static func buildLaunchSpec() -> LaunchSpec? {
+    guard let llamaPath = LlamaBinaries.llamaPath else { return nil }
+
+    let presetsPath = UserSettings.appSupportDir.appendingPathComponent("models.ini").path
+
+    let env = [
+      (key: "GGML_METAL_NO_RESIDENCY", value: "1"),
+      // Set HF_HUB_CACHE so llama-server can resolve model paths in preset
+      (key: "HF_HUB_CACHE", value: UserSettings.hfCacheDirectory.path),
+      (key: "LLAMA_CACHE", value: Self.emptyCachePath),
+    ]
+
+    // Order here is purely cosmetic (`serve` ignores flag order) -- it's
+    // chosen so the rendered command reads well: the two path flags grouped up
+    // top, then the remaining value-taking flags, and the bare toggles last.
+    var arguments = [
+      // `serve` is the `llama` subcommand that replaces the old `llama-server`.
+      "serve",
+      // Path flags, grouped together.
+      "--models-preset", presetsPath,
+      "--log-file", Self.logFilePath,
+    ]
+
+    // Custom web app: serve the user's folder at `/` instead of the built-in
+    // chat. The API routes are unaffected. Kept with the other path flags.
+    if let webUIDirectory = effectiveWebUIDirectory {
+      arguments.append(contentsOf: ["--path", webUIDirectory])
+    }
+
+    arguments.append(contentsOf: [
+      // Other value-taking flags.
+      "--port", String(Self.port),
+      "--models-max", "1",
+      "--fit-target", String(Int(Model.fitTargetMb)),
+    ])
+
+    // Bind to custom address if network exposure is enabled
+    if let bindAddress = effectiveBindAddress {
+      arguments.append(contentsOf: ["--host", hostArgument(for: bindAddress)])
+    }
+
+    // Unload model from memory when idle
+    if UserSettings.sleepIdleTime != .disabled {
+      arguments.append(contentsOf: [
+        "--sleep-idle-seconds", String(UserSettings.sleepIdleTime.rawValue),
+      ])
+    }
+
+    // Bare toggles (no value) last, so they don't split the value flags above.
+    arguments.append(contentsOf: ["--jinja", "--spec-default"])
+
+    // Agent mode: enables the server's built-in tools and the UI's CORS/MCP
+    // proxy. Opt-in via Settings; off by default because it lets models act
+    // on the local machine.
+    if UserSettings.agentMode {
+      arguments.append("--agent")
+    }
+
+    // User-supplied extra args (the `extraServerArgs` default) go at the very
+    // end, so where llama-server honors the later occurrence they can
+    // override the app's own flags. Passed verbatim -- no validation; a bad
+    // flag surfaces as a launch failure like any other server error.
+    let extraArgs = UserSettings.extraServerArgList
+    arguments.append(contentsOf: extraArgs)
+
+    return LaunchSpec(
+      executablePath: llamaPath, arguments: arguments, extraArgCount: extraArgs.count, env: env)
+  }
+
+  /// Reclaims `port` by killing any stray `llama serve` still listening on it.
+  ///
+  /// `stop()` only reaps the process *this* app instance tracks. If a prior
+  /// session was force-killed/crashed without cleanly stopping its child, that
+  /// orphaned `llama serve` keeps holding the port -- the new launch then fails
+  /// to bind and exits, so the stale orphan shadows every future launch and the
+  /// webui shows no models. Killing the listener here breaks that cycle.
+  ///
+  /// Scoped to `llama` processes: if some unrelated app holds the port we leave
+  /// it alone. In that case we return the name of the offending process so the
+  /// caller can surface the conflict as a clear error instead of letting the
+  /// bind fail opaquely; `nil` means the port is now ours to bind.
+  nonisolated static func reclaimPort() -> String? {
+    // `lsof -ti` prints just the PIDs listening on the TCP port.
+    let lsof = Process()
+    lsof.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+    lsof.arguments = ["-ti", "tcp:\(port)", "-sTCP:LISTEN"]
+    let pipe = Pipe()
+    lsof.standardOutput = pipe
+    lsof.standardError = FileHandle.nullDevice
+    guard (try? lsof.run()) != nil else { return nil }
+    lsof.waitUntilExit()
+
+    let out = pipe.fileHandleForReading.readDataToEndOfFile()
+    let pids = String(decoding: out, as: UTF8.self)
+      .split(whereSeparator: \.isNewline)
+      .compactMap { pid_t($0) }
+
+    // The first non-`llama` process found holding the port, if any -- reported
+    // back so the caller can name it in the conflict error.
+    var blocker: String? = nil
+
+    for pid in pids {
+      // Only kill it if it's actually a `llama` process -- never a stranger
+      // that happens to hold the port. `ps -o comm=` prints the executable path.
+      let ps = Process()
+      ps.executableURL = URL(fileURLWithPath: "/bin/ps")
+      ps.arguments = ["-p", "\(pid)", "-o", "comm="]
+      let psPipe = Pipe()
+      ps.standardOutput = psPipe
+      ps.standardError = FileHandle.nullDevice
+      guard (try? ps.run()) != nil else { continue }
+      ps.waitUntilExit()
+
+      let comm = String(decoding: psPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+
+      if comm.hasSuffix("llama") {
+        kill(pid, SIGKILL)
+      } else if !comm.isEmpty, blocker == nil {
+        // A process we won't touch -- keep just its name (not the full path) for
+        // a user-facing message.
+        blocker = URL(fileURLWithPath: comm).lastPathComponent
+      }
+    }
+
+    return blocker
+  }
+
+  /// Launches llama-server in Router Mode.
+  ///
+  /// The port-freeing pre-flight -- reaping any process we still track and
+  /// scanning/killing a stale orphan holding the port (`lsof`/`ps`) -- can each
+  /// block for seconds when the machine is under load. Doing it synchronously on
+  /// the main actor froze the UI (LLAMABARN-8M/8S), so we run it off the main
+  /// actor and hop back to launch.
+  func start() {
+    // Fast, non-blocking teardown of the previous run, on the main actor.
+    // Setting .idle first tells the outgoing process's termination handler this
+    // is an intentional stop (so it won't flip us to an error state); clearing
+    // activeProcess hands the actual (blocking) reap to the detached task below.
+    state = .idle
+    modelStatuses = [:]
+    stopStatusPolling()
+    cleanUpPipes()
+    let previous = activeProcess
+    activeProcess = nil
+
+    state = .loading
+    startGeneration += 1
+    let generation = startGeneration
+
+    // Chain onto any in-flight pre-flight so their `reclaimPort()` scans run
+    // strictly one at a time. `reclaimPort()` SIGKILLs *any* `llama` on the port,
+    // so if a superseded (older) scan ran concurrently it could kill the server a
+    // newer pre-flight had just launched.
+    let prior = startTask
+    startTask = Task {
+      await prior?.value
+
+      // Off the main actor: reap the previous process and reclaim the port from
+      // any orphaned `llama serve` a prior crashed session left holding it --
+      // otherwise this launch can't bind and would exit. Both can block for
+      // seconds under load, so they must not run on the main actor.
+      let blocker = await Task.detached {
+        Self.terminateAndWait(previous)
+        return Self.reclaimPort()
+      }.value
+
+      // Back on the main actor. Bail if a newer start()/stop() superseded us
+      // while we were off the main actor.
+      guard generation == startGeneration, state == .loading else { return }
+
+      // If some *other* process (one we won't kill) still holds the port, don't
+      // launch into a silent bind failure -- surface a clear conflict instead.
+      // The `isPortAvailable` re-check guards against the blocker having exited
+      // since the scan (a stale blocker), so we only error on a real conflict.
+      if let blocker, !Self.isPortAvailable(Self.port) {
+        logger.error(
+          "port \(Self.port) is held by \(blocker, privacy: .public); not launching server")
+        state = .error(.portInUse(port: Self.port, by: blocker))
+        return
+      }
+
+      launchServerProcess()
+    }
+  }
+
+  /// Builds the launch spec and starts the llama-server process. Main-actor only,
+  /// run after `start()`'s off-main pre-flight has freed the port. Fast: nothing
+  /// here blocks (`process.run()` returns immediately).
+  private func launchServerProcess() {
+    // Resolve the launch spec up front; a missing install surfaces as an error.
+    guard let spec = Self.buildLaunchSpec() else {
+      logger.error("llama binary not found")
+      state = .error(.invalidPath("llama"))
+      return
+    }
+
+    // Ensure the empty-cache dir referenced by LLAMA_CACHE exists.
+    try? FileManager.default.createDirectory(
+      atPath: Self.emptyCachePath, withIntermediateDirectories: true)
+    // llama.cpp opens `--log-file` with `fopen`, which won't create missing
+    // folders -- without this the server runs but silently writes no log.
+    try? FileManager.default.createDirectory(
+      atPath: (Self.logFilePath as NSString).deletingLastPathComponent,
+      withIntermediateDirectories: true)
+
+    // All paths in models.ini are absolute, so CWD is mostly cosmetic —
+    // but point it at Application Support so stray relative writes (if any) don't leak into $HOME.
+    let workingDirectory = UserSettings.appSupportDir.path
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: spec.executablePath)
+    process.arguments = spec.arguments
+    process.currentDirectoryURL = URL(fileURLWithPath: workingDirectory)
+
+    var environment = ProcessInfo.processInfo.environment
+    for (key, value) in spec.env { environment[key] = value }
+    process.environment = environment
+
+    process.standardOutput = Pipe()
+    process.standardError = Pipe()
+
+    // Set up termination handler for proper state management
+    process.terminationHandler = { [weak self] proc in
+      Task { @MainActor in
+        guard let self = self else { return }
+
+        // Skip handler if we're already idle (intentional stop) or this is an old process
+        guard self.state != .idle else { return }
+        guard self.activeProcess == proc else { return }
+
+        self.cleanUpResources()
+
+        if proc.terminationStatus == 0 {
+          self.state = .idle
+        } else if self.recoverFromPresetRejection() {
+          // The process died on a key from models.user.ini and we've restarted
+          // without it -- a typo shouldn't leave the app with no server at all.
+        } else {
+          self.state = .error(
+            .launchFailed(
+              self.rejectedOption.map { "Unknown option ‘\($0)’ in \(UserModelOverrides.filename)" }
+                ?? "Process crashed"))
+        }
+      }
+    }
+
+    do {
+      try process.run()
+      self.activeProcess = process
+      attachOutputHandlers(for: process)
+    } catch {
+      let errorMessage = "Process launch failed: \(error.localizedDescription)"
+      logger.error("Failed to launch process: \(error)")
+      self.state = .error(.launchFailed(errorMessage))
+      self.modelStatuses = [:]
+      return
+    }
+    startStatusPolling()
+  }
+
+  /// Terminates the currently running llama-server process and resets state
+  func stop() {
+    // Set to .idle before terminating so the handler knows this is intentional
+    state = .idle
+
+    // Clearing statuses also clears the derived `activeModelId`, so a stopped
+    // server never leaves a model showing as loaded in the menu.
+    modelStatuses = [:]
+
+    // Supersede any in-flight start() pre-flight (e.g. quitting mid-launch), so
+    // it doesn't hop back and launch a server we've just asked to stop.
+    startGeneration += 1
+
+    cleanUpResources()
+  }
+
+  /// Reloads the server (restarts) to pick up changes in configuration (e.g. models list)
+  func reload() {
+    // Skip reload only if server is idle (never started or intentionally stopped)
+    guard state != .idle else { return }
+    logger.info("Restarting server to apply configuration changes")
+
+    // Regenerate models.ini before restarting to pick up any setting changes
+    // (e.g. context window size) that affect the INI content.
+    ModelManager.shared.updateModelsFile()
+
+    start()
+  }
+
+  /// Applies a models.ini change to a running server without a restart, via the
+  /// router's in-place reload (`/models?reload=1`). The server reconciles
+  /// surgically -- only models whose entry changed or disappeared are unloaded --
+  /// so installing/removing an unrelated model no longer drops the resident
+  /// model or kills an in-flight generation. Falls back to a full restart when
+  /// the server isn't running yet (still loading, or in error) or the request
+  /// fails.
+  func syncModelList() {
+    // Same skip as reload(): an idle server picks up models.ini on next start.
+    guard state != .idle else { return }
+    guard isRunning else {
+      reload()
+      return
+    }
+    logger.info("Reloading server model list in place")
+    Task {
+      if !(await api.reloadModels()) {
+        await MainActor.run {
+          // The common way a bad override surfaces: the file changed under a
+          // running server, and the router refused it. Recovering here avoids
+          // a restart into the same rejection.
+          if !self.recoverFromPresetRejection() {
+            // Request failed (server wedged?) -- restart to get back to a good state.
+            self.reload()
+          }
+        }
+      }
+    }
+  }
+
+  /// Cleans up all background resources tied to the server process
+  private func cleanUpResources() {
+    stopActiveProcess()
+    cleanUpPipes()
+    stopStatusPolling()
+  }
+
+  /// Gracefully terminates the currently running process. Main-actor path used
+  /// by `stop()` (app termination); `start()` reaps its previous process via
+  /// `terminateAndWait` off the main actor instead.
+  private func stopActiveProcess() {
+    let process = activeProcess
+    activeProcess = nil
+    Self.terminateAndWait(process)
+  }
+
+  /// Terminates `process` and blocks until it exits, escalating to SIGKILL after
+  /// 2s if it ignores SIGTERM. `nonisolated` so `start()` can run it off the main
+  /// actor -- the wait can take up to 2s and must not block the UI (LLAMABARN-8S).
+  nonisolated private static func terminateAndWait(_ process: Process?) {
+    guard let process, process.isRunning else { return }
+
+    process.terminate()
+
+    DispatchQueue.global().asyncAfter(deadline: .now() + 2.0) {
+      if process.isRunning {
+        kill(process.processIdentifier, SIGKILL)
+      }
+    }
+
+    process.waitUntilExit()
+  }
+
+  // MARK: - State Helper Methods
+
+  /// Checks if the server is currently running
+  var isRunning: Bool {
+    state == .running
+  }
+
+  /// Checks if any model is currently loaded (not loading)
+  var isAnyModelLoaded: Bool {
+    return modelStatuses.values.contains(.loaded)
+  }
+
+  /// Checks if any model is currently loading
+  var isAnyModelLoading: Bool {
+    return modelStatuses.values.contains(.loading)
+  }
+
+  /// Checks if the server is currently loading
+  var isLoading: Bool {
+    state == .loading
+  }
+
+  /// Checks if the specified model is currently active
+  func isActive(model: Model) -> Bool {
+    return modelStatuses[model.id] == .loaded
+  }
+
+  /// Checks if the specified model is currently loading
+  func isLoading(model: Model) -> Bool {
+    return modelStatuses[model.id] == .loading
+  }
+
+  /// Switch the active model in the UI. In Router Mode, this doesn't restart the server,
+  /// but updates what Llama considers the "current" model.
+  func loadModel(_ model: Model) {
+    if !isRunning && !isLoading {
+      start()
+    }
+
+    // Remember this as the user's last deliberately-run model, so the
+    // global-input capture panel has a sticky target even when nothing is
+    // loaded later.
+    UserSettings.lastUsedModelId = model.id
+
+    // Optimistically set status to loading for immediate UI feedback. This also
+    // makes the model the derived `activeModelId`. Polling updates to .loaded
+    // once the server confirms.
+    modelStatuses[model.id] = .loading
+
+    Task {
+      _ = await api.loadModel(id: model.id)
+    }
+
+    logger.info("Requested active model: \(model.displayName)")
+  }
+
+  /// Deselects the current model in the UI.
+  func unloadModel(_ model: Model) {
+    // Optimistically set status to unloaded for immediate UI feedback (which
+    // also clears the derived `activeModelId`). Polling confirms once the
+    // server acknowledges.
+    modelStatuses[model.id] = .unloaded
+
+    Task {
+      _ = await api.unloadModel(id: model.id)
+    }
+  }
+
+  private func cleanUpPipes() {
+    outputPipe?.fileHandleForReading.readabilityHandler = nil
+    errorPipe?.fileHandleForReading.readabilityHandler = nil
+    try? outputPipe?.fileHandleForReading.close()
+    try? errorPipe?.fileHandleForReading.close()
+    outputPipe = nil
+    errorPipe = nil
+  }
+
+  private func startStatusPolling() {
+    stopStatusPolling()
+
+    healthCheckTask = Task {
+      // Poll /models to detect status.
+      while !Task.isCancelled {
+        await checkStatus()
+        try? await Task.sleep(nanoseconds: 1_000_000_000)
+      }
+    }
+  }
+
+  private func stopStatusPolling() {
+    healthCheckTask?.cancel()
+    healthCheckTask = nil
+  }
+
+  private func checkStatus() async {
+    guard let newStatuses = await api.fetchModelStatuses() else { return }
+
+    // If the server reports a model as sleeping (idle timeout reached), unload it
+    // so the UI reflects the freed state. A .sleeping model isn't counted as the
+    // active model, so no extra bookkeeping is needed here.
+    if let sleepingModelId = newStatuses.first(where: { $0.value == .sleeping })?.key {
+      _ = await api.unloadModel(id: sleepingModelId)
+    }
+
+    await MainActor.run {
+      if self.state == .loading {
+        self.state = .running
+      }
+      if self.modelStatuses != newStatuses {
+        self.modelStatuses = newStatuses
+      }
+    }
+  }
+}

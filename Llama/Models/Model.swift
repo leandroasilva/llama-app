@@ -1,0 +1,231 @@
+import Foundation
+
+/// Represents an installed or installable AI model.
+/// Built from a deeplink resolve (placeholder pre-download) or from the HF
+/// cache scan (post-install). Metadata is parsed from the HF repo dir name and
+/// the GGUF filename — there is no curated catalog backing this struct.
+struct Model: Identifiable, Codable {
+  /// Stable model id built by `makeId` — the verbatim `{org}/{repo}:{TAG}`,
+  /// exactly llama-server's `-hf` shorthand, for every org. Stable across the
+  /// deeplink and post-install scan paths because both derive the tag through
+  /// `GGUFQuant.tag(forPath:)` and build the id through `makeId`.
+  let id: String
+  /// Maximum context length in tokens. 128k upper bound — clamped by the
+  /// memory budget once `ctxBytesPer1kTokens` is measured.
+  let ctxWindow: Int
+  /// Total bytes on disk for the model (main + shards + mmproj).
+  let fileSize: Int64
+  /// Estimated KV-cache footprint for a 1k-token context, in bytes.
+  /// 0 = MemProfile probe is pending; -1 = probe failed; >0 = measured.
+  var ctxBytesPer1kTokens: Int
+  /// Measured resident weight memory in bytes from the MemProfile probe.
+  /// 0 means unavailable — compatibility math falls back to
+  /// `fileSize * overheadMultiplier`. For MoE models this is much smaller than
+  /// `fileSize`, since only active experts contribute to resident memory.
+  var residentBytes: Int
+  /// Remote main GGUF URL — used by the deeplink download path. Sideloaded
+  /// scan-discovered entries set this to `file:///` since no remote URL is
+  /// needed once files are on disk.
+  let downloadUrl: URL
+  /// Additional shard URLs for multi-part GGUFs (00002-of-00003.gguf etc.).
+  /// `llama-server` discovers these in the same directory as the main file.
+  let additionalParts: [URL]?
+  /// Vision projection sidecar URL (mmproj.gguf). Pre-download placeholders
+  /// from the deeplink path carry this when the resolver attaches one.
+  let mmprojUrl: URL?
+  /// Draft-head sidecar URL (`dflash-….gguf` or `mtp-….gguf`, see
+  /// `DraftHead`). Some repos ship a speculative-decoding head alongside the
+  /// main weights; when present we download it and hand it to llama-server as
+  /// the draft model. Pre-download placeholders carry this when the resolver
+  /// attaches one.
+  let draftUrl: URL?
+  /// The draft head this model runs with, as the cache scan found it on disk --
+  /// an embedded MTP head in the main weights or a quant-matched sidecar. Set
+  /// by the scan, which is the only place both forms are visible (see
+  /// `HFCache.buildSideloadedEntry`); the deeplink path leaves it nil and
+  /// carries the sidecar in `draftUrl` instead. Read it through `draftHead`.
+  let scannedDraftHead: DraftHead?
+  /// Whether this is a decision model -- one that scores the options of typed
+  /// questions through llama-server's `/v1/systemone` endpoint instead of
+  /// chatting. Read from the GGUF header by the cache scan (see
+  /// `GGUFMetadata.isDecisionModel`); the deeplink path can't know it before
+  /// the file is on disk, so it leaves this false.
+  let isDecisionModel: Bool
+
+  init(
+    id: String,
+    ctxWindow: Int = 131_072,
+    fileSize: Int64,
+    ctxBytesPer1kTokens: Int = 0,
+    residentBytes: Int = 0,
+    downloadUrl: URL,
+    additionalParts: [URL]? = nil,
+    mmprojUrl: URL? = nil,
+    draftUrl: URL? = nil,
+    scannedDraftHead: DraftHead? = nil,
+    isDecisionModel: Bool = false
+  ) {
+    self.id = id
+    self.ctxWindow = ctxWindow
+    self.fileSize = fileSize
+    self.ctxBytesPer1kTokens = ctxBytesPer1kTokens
+    self.residentBytes = residentBytes
+    self.downloadUrl = downloadUrl
+    self.additionalParts = additionalParts
+    self.mmprojUrl = mmprojUrl
+    self.draftUrl = draftUrl
+    self.scannedDraftHead = scannedDraftHead
+    self.isDecisionModel = isDecisionModel
+  }
+
+  /// Decoding treats `isDecisionModel` and `scannedDraftHead` as optional:
+  /// download placeholders are `Model`s written to disk by earlier app
+  /// versions, and a required key would make every paused download from before
+  /// the field existed fail to decode and silently drop out of the list.
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    id = try c.decode(String.self, forKey: .id)
+    ctxWindow = try c.decode(Int.self, forKey: .ctxWindow)
+    fileSize = try c.decode(Int64.self, forKey: .fileSize)
+    ctxBytesPer1kTokens = try c.decode(Int.self, forKey: .ctxBytesPer1kTokens)
+    residentBytes = try c.decode(Int.self, forKey: .residentBytes)
+    downloadUrl = try c.decode(URL.self, forKey: .downloadUrl)
+    additionalParts = try c.decodeIfPresent([URL].self, forKey: .additionalParts)
+    mmprojUrl = try c.decodeIfPresent(URL.self, forKey: .mmprojUrl)
+    // Placeholders from before DFlash support stored the sidecar as `mtpUrl`
+    // (and an always-false `hasMTPHead`, which is safe to drop -- placeholders
+    // come from the deeplink path, which never sets it).
+    let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
+    draftUrl =
+      try c.decodeIfPresent(URL.self, forKey: .draftUrl)
+      ?? legacy.decodeIfPresent(URL.self, forKey: .mtpUrl)
+    scannedDraftHead = try c.decodeIfPresent(DraftHead.self, forKey: .scannedDraftHead)
+    isDecisionModel = try c.decodeIfPresent(Bool.self, forKey: .isDecisionModel) ?? false
+  }
+
+  /// Keys older app versions wrote that the current shape no longer has.
+  private enum LegacyCodingKeys: String, CodingKey {
+    case mtpUrl
+  }
+
+  /// Builds the stable model id shared by the deeplink and post-install scan
+  /// paths: the verbatim `{org}/{repo}:{TAG}`, matching llama-server's `-hf`
+  /// shorthand for every org — no lowercasing, no `-GGUF` stripping, no org
+  /// dropped. One grammar means every id round-trips through `-hf` and matches
+  /// llama-server's own cache-scan naming; row-length concerns are handled by
+  /// the display layer (`ModelIdParser`), not the id.
+  static func makeId(org: String, repo: String, tag: String) -> String {
+    "\(idBase(org: org, repo: repo)):\(tag)"
+  }
+
+  /// `makeId` for a combined `{org}/{repo}` string, as deeplinks carry it.
+  static func makeId(orgSlashRepo: String, tag: String) -> String {
+    "\(idBase(orgSlashRepo: orgSlashRepo)):\(tag)"
+  }
+
+  /// The pre-colon portion of the id for a given org/repo. Lets callers that
+  /// hold a catalog repo string (`{org}/{repo}`) match against installed model
+  /// ids regardless of quant — e.g. the Discover section hiding suggestions
+  /// whose repo is already installed.
+  static func idBase(org: String, repo: String) -> String {
+    "\(org)/\(repo)"
+  }
+
+  /// `idBase` for a combined `{org}/{repo}` string, as catalog suggestions
+  /// carry it. The id base is the repo string verbatim.
+  static func idBase(orgSlashRepo: String) -> String {
+    orgSlashRepo
+  }
+
+  /// The pre-colon portion of this model's id (e.g.
+  /// "unsloth/GLM-4.7-Flash-GGUF"). Hints, alerts, and logs show it raw; menu
+  /// rows render a parsed view of the id (`ModelIdParser`) — a deterministic
+  /// rendering, not a second name, so every surface still derives from the
+  /// one id string.
+  var idBase: String {
+    guard let colonIdx = id.lastIndex(of: ":") else { return id }
+    return String(id[..<colonIdx])
+  }
+
+  /// Display name — the id base. Kept as a semantic alias so call sites read
+  /// as "the model's name" rather than "an id fragment".
+  var displayName: String {
+    idBase
+  }
+
+  /// Brand logo asset name in `Assets.xcassets/ModelLogos`, matched from the
+  /// name the row shows (`ModelIdParser`). Nil when it doesn't match a known
+  /// brand — the row then falls back to a generic system symbol.
+  var brandLogoAsset: String? {
+    ModelLogos.asset(matching: ModelIdParser.parse(id).name)
+  }
+
+  /// Human-readable total file size for the metadata line.
+  var totalSize: String {
+    Format.gigabytes(fileSize)
+  }
+
+  /// Vision support is implied by an attached mmproj sidecar.
+  var hasVisionSupport: Bool {
+    mmprojUrl != nil
+  }
+
+  /// The draft head this model runs speculative decoding with, if any, from
+  /// either view: a head detected on disk by the cache scan
+  /// (`scannedDraftHead`) or a sidecar the deeplink path will download
+  /// (`draftUrl`, kind read from its filename). Mirrors `hasVisionSupport` —
+  /// one capability question the row can ask without reaching for
+  /// `ResolvedPaths`.
+  var draftHead: DraftHead? {
+    scannedDraftHead ?? draftUrl.flatMap { DraftHead(sidecarPath: $0.lastPathComponent) }
+  }
+
+  /// All remote URLs this model needs to download (main + shards + mmproj).
+  var allDownloadUrls: [URL] {
+    var urls = [downloadUrl]
+    if let additional = additionalParts {
+      urls.append(contentsOf: additional)
+    }
+    if let mmproj = mmprojUrl {
+      urls.append(mmproj)
+    }
+    if let draft = draftUrl {
+      urls.append(draft)
+    }
+    return urls
+  }
+
+  /// HF cache repo directory name (e.g. "models--unsloth--Qwen3.5-2B-GGUF").
+  /// Derived from `downloadUrl` for placeholder rows that came from a deeplink.
+  /// Nil for scan-discovered entries (whose `downloadUrl` is `file:///`); those
+  /// carry the dir name in `ResolvedPaths.hfRepoDirName` instead.
+  var hfRepoDir: String? {
+    HFCache.repoDirName(from: downloadUrl)
+  }
+
+  /// Sort key — the row's rendering: non-default orgs keep their `org/`
+  /// prefix (see `ModelIdParser.Parsed.displayOrg`), so prefixed rows sort by
+  /// the org and cluster together, and the list's left edge stays
+  /// alphabetical. Default-org models key on the bare name, matching their
+  /// bare rendering.
+  private var sortKey: String {
+    let parsed = ModelIdParser.parse(id)
+    if let org = parsed.displayOrg {
+      return "\(org)/\(parsed.name)"
+    }
+    return parsed.name
+  }
+
+  /// Sort order — by displayed name, then by id for stability. Parameter
+  /// counts and full-precision rankings are no longer available without a
+  /// curated catalog, so id is the tie-breaker.
+  static func displayOrder(_ lhs: Model, _ rhs: Model) -> Bool {
+    // Keys are compared case-insensitively so differently-cased names
+    // (e.g. "gemma-4", "embeddinggemma") sort alongside their capitalized
+    // siblings rather than clustering at the end of the list. Ties (same
+    // key ignoring case) fall back to the id for a stable order.
+    let keyOrder = lhs.sortKey.caseInsensitiveCompare(rhs.sortKey)
+    if keyOrder != .orderedSame { return keyOrder == .orderedAscending }
+    return lhs.id < rhs.id
+  }
+}

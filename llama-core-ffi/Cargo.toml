@@ -1,0 +1,16 @@
+[package]
+name = "llama-core-ffi"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "llama_core_ffi"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+llama-core = { path = "../llama-core" }
+serde_json = "1"
+
+[build-dependencies]
+cbindgen = "0.27"
