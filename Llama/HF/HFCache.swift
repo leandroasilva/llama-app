@@ -158,30 +158,19 @@ enum HFCache {
       request.httpMethod = "HEAD"
 
       guard let (_, response) = try? await session.data(for: request),
-        let httpResponse = response as? HTTPURLResponse,
-        (200...399).contains(httpResponse.statusCode)
+        let httpResponse = response as? HTTPURLResponse
       else { continue }
 
-      // Extract blob hash from X-Linked-Etag (preferred) or ETag (fallback)
-      let blobHash: String? = {
-        if let etag = httpResponse.value(forHTTPHeaderField: "X-Linked-Etag") {
-          return etag.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
-        }
-        if let etag = httpResponse.value(forHTTPHeaderField: "ETag") {
-          let cleaned =
-            etag
-            .replacingOccurrences(of: "W/", with: "")
-            .trimmingCharacters(in: CharacterSet(charactersIn: "\""))
-          // Only use if it looks like a SHA256 (64 hex chars)
-          if cleaned.count == 64, cleaned.allSatisfy({ $0.isHexDigit }) {
-            return cleaned
-          }
-        }
-        return nil
-      }()
-
-      let commitHash = httpResponse.value(forHTTPHeaderField: "X-Repo-Commit")
-      results[url] = FileMetadata(blobHash: blobHash, commitHash: commitHash)
+      // Harvest the hashes in the core so the HEAD parsing can't drift from the
+      // rest of the engine (the status gate and the X-Linked-Etag/ETag rules
+      // live in `net.fileMetadata`).
+      let headers = httpResponse.allHeaderFields.map { ["\($0.key)", "\($0.value)"] }
+      let out = LlamaCore.callJSON("net.fileMetadata", [
+        "status": httpResponse.statusCode, "headers": headers,
+      ])
+      guard let meta = out?["metadata"] as? [String: Any] else { continue }
+      results[url] = FileMetadata(
+        blobHash: meta["blobHash"] as? String, commitHash: meta["commitHash"] as? String)
     }
 
     return results
@@ -338,11 +327,12 @@ private class SameHostRedirectDelegate: NSObject, URLSessionTaskDelegate {
     newRequest request: URLRequest,
     completionHandler: @escaping (URLRequest?) -> Void
   ) {
-    // Allow same-host redirects (e.g., HTTP → HTTPS), block cross-host (HF → CDN)
-    if task.originalRequest?.url?.host == request.url?.host {
-      completionHandler(request)
-    } else {
-      completionHandler(nil)
-    }
+    // Allow same-host redirects (e.g., HTTP → HTTPS), block cross-host (HF → CDN).
+    // The rule lives in the core (`net.sameHostRedirect`) so it can't drift.
+    var args: [String: Any] = [:]
+    if let from = task.originalRequest?.url?.host { args["from"] = from }
+    if let to = request.url?.host { args["to"] = to }
+    let same: Bool = LlamaCore.callValue("net.sameHostRedirect", "value", args) ?? false
+    completionHandler(same ? request : nil)
   }
 }

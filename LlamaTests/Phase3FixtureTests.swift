@@ -125,18 +125,7 @@ final class Phase3FixtureTests: XCTestCase {
   /// code it replaces.
   func testRequestMakeOnSwiftOriginal() throws {
     let f = try loadJSON("hf_http.json")
-    let sha = try XCTUnwrap(f["sha256"] as? String)
-    var cases = try XCTUnwrap(f["requests"] as? [[String: Any]])
-    var blobCases = try XCTUnwrap(f["blobHash"] as? [[String: Any]])
-    let commitCases = try XCTUnwrap(f["commitHash"] as? [[String: Any]])
-    let redirectCases = try XCTUnwrap(f["redirect"] as? [[String: Any]])
-
-    // Inject the fixture's 64-hex SHA into the ETag cases so the Swift original
-    // and Rust both evaluate the same strings.
-    for i in blobCases.indices where blobCases[i]["etag"] is String {
-      let etag = blobCases[i]["etag"] as! String
-      blobCases[i]["etag"] = etag.replacingOccurrences(of: "<64hex>", with: sha)
-    }
+    let cases = try XCTUnwrap(f["requests"] as? [[String: Any]])
 
     for c in cases {
       let expected = try XCTUnwrap(c["expected"] as? [[String]])
@@ -155,36 +144,6 @@ final class Phase3FixtureTests: XCTestCase {
         request.value(forHTTPHeaderField: "Authorization"),
         expected.first(where: { $0[0] == "Authorization" })?[1],
         "Authorization for \(c["name"] ?? "")")
-    }
-
-    // blobHash: replicate the Swift HEAD-harvest rules exercised by `fetchFileMetadata`.
-    for c in blobCases {
-      var request = URLRequest(url: URL(string: "https://huggingface.co/x")!)
-      if let v = c["xLinkedEtag"] as? String {
-        request.setValue(v, forHTTPHeaderField: "X-Linked-Etag")
-      }
-      if let v = c["etag"] as? String {
-        request.setValue(v, forHTTPHeaderField: "ETag")
-      }
-      let got = blobHashSwift(from: request)
-      XCTAssertEqual(
-        got, c["expected"] as? String, "blobHash \(c["name"] ?? "")")
-    }
-
-    for c in commitCases {
-      var request = URLRequest(url: URL(string: "https://huggingface.co/x")!)
-      if let v = c["xRepoCommit"] as? String {
-        request.setValue(v, forHTTPHeaderField: "X-Repo-Commit")
-      }
-      XCTAssertEqual(
-        request.value(forHTTPHeaderField: "X-Repo-Commit"), c["expected"] as? String,
-        "commit \(String(describing: c["xRepoCommit"]))")
-    }
-
-    for c in redirectCases {
-      XCTAssertEqual(
-        sameHost(from: c["from"] as? String, to: c["to"] as? String), c["expected"] as? Bool,
-        "redirect \(String(describing: c["from"])) -> \(String(describing: c["to"]))")
     }
 
     // The app's runtime user agent must match the shape the Rust `hfRequest`
@@ -252,27 +211,5 @@ final class Phase3FixtureTests: XCTestCase {
       let out = try call("net.sameHostRedirect", args)
       XCTAssertEqual(out["value"] as? Bool, c["expected"] as? Bool)
     }
-  }
-
-  // MARK: - Local helpers mirroring the Swift inline logic under test
-
-  /// Mirrors the `X-Linked-Etag`-first then SHA256-`ETag` harvest in
-  /// `HFCache.fetchFileMetadata`.
-  private func blobHashSwift(from request: URLRequest) -> String? {
-    if let etag = request.value(forHTTPHeaderField: "X-Linked-Etag") {
-      return etag.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
-    }
-    if let etag = request.value(forHTTPHeaderField: "ETag") {
-      let cleaned = etag
-        .replacingOccurrences(of: "W/", with: "")
-        .trimmingCharacters(in: CharacterSet(charactersIn: "\""))
-      if cleaned.count == 64, cleaned.allSatisfy(\.isHexDigit) { return cleaned }
-    }
-    return nil
-  }
-
-  /// Mirrors `SameHostRedirectDelegate`'s follow rule.
-  private func sameHost(from: String?, to: String?) -> Bool {
-    from == to
   }
 }
