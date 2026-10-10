@@ -123,7 +123,9 @@ final class Phase3FixtureTests: XCTestCase {
   /// The fixture's request semantics, exercised on the *Swift* original so the
   /// Rust port's `hfRequest` module is checked against both the fixture and the
   /// code it replaces.
-  func testRequestMakeOnSwiftOriginal() throws {
+  /// `HFRequest.make` now delegates the header decision to the core; this pins
+  /// the Swift wrapper's translation (and the `AppInfo.userAgent` shape).
+  func testRequestMakeDelegatesToCore() throws {
     let f = try loadJSON("hf_http.json")
     let cases = try XCTUnwrap(f["requests"] as? [[String: Any]])
 

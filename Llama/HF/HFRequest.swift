@@ -6,16 +6,22 @@ import Foundation
 enum HFRequest {
   /// A request carrying the app's User-Agent, plus the user's token when `url`
   /// is on Hugging Face.
+  ///
+  /// The header decision (which headers, and that the token only ever goes to
+  /// `huggingface.co`) lives in the core (`hfRequest.make`); this only
+  /// translates the result. `AppInfo.userAgent` stays Swift-derived -- it comes
+  /// from the bundle and OS, not from HF.
   static func make(_ url: URL, token: String?) -> URLRequest {
     var request = URLRequest(url: url)
-    request.setValue(AppInfo.userAgent, forHTTPHeaderField: "User-Agent")
-    // Match the host exactly or as a subdomain -- a bare `hasSuffix` would also
-    // accept `evilhuggingface.co`, and this check is the only thing keeping the
-    // token off a third-party host.
-    let host = url.host ?? ""
-    if let token, host == "huggingface.co" || host.hasSuffix(".huggingface.co") {
-      request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-    }
+    var args: [String: Any] = [
+      "url": url.absoluteString,
+      "userAgent": AppInfo.userAgent,
+    ]
+    if let token { args["token"] = token }
+    guard let out = LlamaCore.callJSON("hfRequest.make", args),
+      let headers = out["headers"] as? [[String]]
+    else { return request }
+    for header in headers { request.setValue(header[1], forHTTPHeaderField: header[0]) }
     return request
   }
 }
