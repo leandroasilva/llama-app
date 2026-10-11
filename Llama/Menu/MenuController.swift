@@ -725,6 +725,12 @@ final class MenuController: NSObject, NSMenuDelegate {
         // Keep this action one-way, even if the model unloads before the click.
         self?.server.unloadModel(model)
       }))
+    } else {
+      menu.addItem(NSMenuItem.viewItem(with: ActionItemView(
+        title: "Load", symbol: "play.circle.fill"
+      ) { [weak self] in
+        self?.server.loadModel(model)
+      }))
     }
     // Disk footprint rides the Delete row -- it's the one place the number
     // informs a decision (how much space deleting reclaims).

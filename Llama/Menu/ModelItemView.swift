@@ -75,10 +75,12 @@ final class ModelItemView: ItemView, NSGestureRecognizerDelegate {
   // Icon plus the trailing glyphs: one persistent per state (chevron when
   // installed, pause/play when downloading -- mutually exclusive, so they share
   // a column) and the hover-only cancel X in its own column to their left.
+  // Load/unload button for installed models -- appears on hover, toggles model state.
   private let iconView = IconView()
   private let cancelImageView = NSImageView()
   private let chevronImageView = NSImageView()
   private let pausePlayImageView = NSImageView()
+  private let loadUnloadImageView = NSImageView()
 
   /// Whether the row is currently styled as downloading (in flight, paused, or in the
   /// brief post-cancel window). Set by `refresh()`; read back both to detect the
@@ -142,6 +144,13 @@ final class ModelItemView: ItemView, NSGestureRecognizerDelegate {
       pointSize: Self.pausePlaySize)
     pausePlayImageView.isHidden = true
 
+    // Load/unload button for installed models -- hover-only like cancel X.
+    // Shows "play.circle" when unloaded, "stop.circle" when loaded.
+    Theme.configure(
+      loadUnloadImageView, symbol: "play.circle", color: .tertiaryLabelColor,
+      pointSize: Self.pausePlaySize)
+    loadUnloadImageView.isHidden = true
+
     setupLayout()
     setupGestures()
     refresh()
@@ -170,8 +179,9 @@ final class ModelItemView: ItemView, NSGestureRecognizerDelegate {
     // Trailing glyphs, gated in `updateTrailingGlyphs`. Cancel comes first so it
     // opens a column to the left of the persistent glyph, which stays put. The
     // chevron and pause/play never show at once, so they share the last column.
+    // Load/unload is hover-only for installed models, placed after the persistent glyph.
     let rootStack = NSStackView(
-      views: [leading, spacer, cancelImageView, chevronImageView, pausePlayImageView])
+      views: [leading, spacer, cancelImageView, chevronImageView, pausePlayImageView, loadUnloadImageView])
     rootStack.orientation = .horizontal
     rootStack.alignment = .centerY
     rootStack.spacing = 6
@@ -211,6 +221,19 @@ final class ModelItemView: ItemView, NSGestureRecognizerDelegate {
     // (the row body itself resumes a paused download — opposite action, same row).
     let cancelClick = NSClickGestureRecognizer(target: self, action: #selector(didClickCancel))
     cancelImageView.addGestureRecognizer(cancelClick)
+
+    // Load/unload button for installed models.
+    let loadUnloadClick = NSClickGestureRecognizer(target: self, action: #selector(didClickLoadUnload))
+    loadUnloadImageView.addGestureRecognizer(loadUnloadClick)
+  }
+
+  @objc private func didClickLoadUnload() {
+    if server.isActive(model: model) {
+      server.unloadModel(model)
+    } else {
+      server.loadModel(model)
+    }
+    refresh()
   }
 
   @objc private func didClickRow() {
@@ -235,16 +258,19 @@ final class ModelItemView: ItemView, NSGestureRecognizerDelegate {
     actionHandler.cancelDownload(for: model)
   }
 
-  // Prevent the row gesture from firing when the click lands on the cancel X,
-  // which owns its own gesture. The chevron is decorative and deliberately
-  // absent here — a click on it should fall through and open the page like the
-  // rest of the row.
+  // Prevent the row gesture from firing when the click lands on the cancel X
+  // or the load/unload button, which own their own gestures. The chevron is
+  // decorative and deliberately absent here — a click on it should fall through
+  // and open the page like the rest of the row.
   func gestureRecognizer(
     _ gestureRecognizer: NSGestureRecognizer, shouldAttemptToRecognizeWith event: NSEvent
   ) -> Bool {
     let loc = event.locationInWindow
-    return cancelImageView.isHidden
-      || !cancelImageView.bounds.contains(cancelImageView.convert(loc, from: nil))
+    let inCancel = !cancelImageView.isHidden
+      && cancelImageView.bounds.contains(cancelImageView.convert(loc, from: nil))
+    let inLoadUnload = !loadUnloadImageView.isHidden
+      && loadUnloadImageView.bounds.contains(loadUnloadImageView.convert(loc, from: nil))
+    return !inCancel && !inLoadUnload
   }
 
   func refresh() {
@@ -349,6 +375,16 @@ final class ModelItemView: ItemView, NSGestureRecognizerDelegate {
     iconView.setLoading(isLoading)
     iconView.isActive = isActive
 
+    // Update load/unload button symbol
+    let hasModelInstalled = modelManager.isInstalled(model)
+    if hasModelInstalled {
+      let symbol = isActive ? "stop.circle.fill" : "play.circle.fill"
+      Theme.configure(
+        loadUnloadImageView, symbol: symbol,
+        color: isActive ? .controlAccentColor : .tertiaryLabelColor,
+        pointSize: Self.pausePlaySize)
+    }
+
     needsDisplay = true
   }
 
@@ -367,14 +403,18 @@ final class ModelItemView: ItemView, NSGestureRecognizerDelegate {
   // Picks the trailing glyphs for the row's state. The persistent pair are
   // hints, not buttons, so they don't wait for hover -- a hint that appears
   // only once you're already pointing at the row is too late to be one. Cancel
-  // is an actual button and stays hover-only. Called from both `refresh()`
-  // (state changes while hovered) and `highlightDidChange` (hover enters/leaves).
+  // and load/unload are actual buttons and stay hover-only. Called from both
+  // `refresh()` (state changes while hovered) and `highlightDidChange` (hover
+  // enters/leaves).
   private func updateTrailingGlyphs() {
     cancelImageView.isHidden = !(isHighlighted && showAsDownloading)
     // Both keyed off `showAsDownloading` rather than the live-or-paused state,
     // so a cancelled row doesn't flash a chevron for a frame before it goes.
     pausePlayImageView.isHidden = !showAsDownloading
     chevronImageView.isHidden = showAsDownloading || !modelManager.isInstalled(model)
+    // Load/unload button: hover-only for installed models.
+    let hasModelInstalled = modelManager.isInstalled(model)
+    loadUnloadImageView.isHidden = !(isHighlighted && hasModelInstalled)
   }
 
   override func viewDidChangeEffectiveAppearance() {
