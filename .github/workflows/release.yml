@@ -93,14 +93,17 @@ jobs:
       - name: Resolve signing identity
         id: identity
         run: |
+          # Use the certificate hash (first field) instead of name to avoid ambiguity
+          HASH=$(security find-identity -v -p codesigning | head -1 | awk '{print $2}')
           IDENTITY=$(security find-identity -v -p codesigning | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
           echo "identity=$IDENTITY" >> "$GITHUB_OUTPUT"
-          echo "Signing with: $IDENTITY"
+          echo "Signing with: $IDENTITY ($HASH)"
 
       - name: Build and archive
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          SIGNING_IDENTITY: ${{ steps.identity.outputs.identity }}
+          SIGNING_HASH: ${{ steps.identity.outputs.hash }}
         run: |
           xcodebuild archive \
             -scheme Llama \
@@ -110,13 +113,13 @@ jobs:
             ARCHS=arm64 \
             MARKETING_VERSION="${{ steps.version.outputs.version }}" \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
-            CODE_SIGN_IDENTITY="$SIGNING_IDENTITY" \
+            CODE_SIGN_IDENTITY="$SIGNING_HASH" \
             CODE_SIGN_STYLE=Manual
 
       - name: Export signed app
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          SIGNING_IDENTITY: ${{ steps.identity.outputs.identity }}
+          SIGNING_HASH: ${{ steps.identity.outputs.hash }}
         run: |
           cat > build/ExportOptions.plist <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
@@ -130,7 +133,7 @@ jobs:
             <key>signingStyle</key>
             <string>manual</string>
             <key>signingCertificate</key>
-            <string>${SIGNING_IDENTITY}</string>
+            <string>${SIGNING_HASH}</string>
             <key>destination</key>
             <string>export</string>
           </dict>
@@ -174,9 +177,9 @@ jobs:
 
       - name: Sign DMG
         env:
-          SIGNING_IDENTITY: ${{ steps.identity.outputs.identity }}
+          SIGNING_HASH: ${{ steps.identity.outputs.hash }}
         run: |
-          codesign --sign "$SIGNING_IDENTITY" \
+          codesign --sign "$SIGNING_HASH" \
             --timestamp \
             "build/${{ env.PRODUCT_NAME }}.dmg"
 
