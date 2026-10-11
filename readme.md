@@ -6,11 +6,7 @@ Llama is a native macOS menu bar app that runs local large language models on yo
 
 ## Install
 
-```sh
-brew install --cask llama-app
-```
-
-Or download the latest DMG from [Releases](https://github.com/leandroasilva/llama-app/releases).
+Download the latest DMG from [Releases](https://github.com/leandroasilva/llama-app/releases), open it, and drag Llama.app to your Applications folder.
 
 ## What it does
 
