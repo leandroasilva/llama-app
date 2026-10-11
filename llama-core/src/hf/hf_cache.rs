@@ -269,6 +269,13 @@ impl HFCache {
             }
         }
 
+        // Delete the refs/ directory (contains commit hash reference) so the
+        // parent repo dir can be cleaned up when empty.
+        let refs_dir = Path::new(cache_dir).join(repo_dir).join("refs");
+        if refs_dir.exists() {
+            let _ = fs::remove_dir_all(&refs_dir);
+        }
+
         clean_empty_dirs(&Path::new(cache_dir).join(repo_dir));
         Ok(())
     }
