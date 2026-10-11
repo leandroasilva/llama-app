@@ -2,7 +2,7 @@
 
 Llama is a native macOS menu bar app that runs local large language models on your machine. No cloud, no accounts, no data leaving your computer.
 
-![Llama in action](vibe_images/llama-app-screenshot_1791717217533_2ffe619e.png)
+![Llama in action](vibe_images/llama-app-screenshot-v2_1791720349394_e6953401.png)
 
 ## Install
 
