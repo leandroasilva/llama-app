@@ -118,10 +118,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           SIGNING_IDENTITY: ${{ steps.identity.outputs.identity }}
         run: |
-          xcodebuild -exportArchive \
-            -archivePath build/Llama.xcarchive \
-            -exportPath build/export \
-            -exportOptionsPlist - <<PLIST
+          cat > build/ExportOptions.plist <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
@@ -139,6 +136,11 @@ jobs:
           </dict>
           </plist>
           PLIST
+
+          xcodebuild -exportArchive \
+            -archivePath build/Llama.xcarchive \
+            -exportPath build/export \
+            -exportOptionsPlist build/ExportOptions.plist
 
       - name: Notarize app
         env:
