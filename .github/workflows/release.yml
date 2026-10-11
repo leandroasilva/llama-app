@@ -2,8 +2,8 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -20,6 +20,26 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute next version
+        id: version
+        run: |
+          LATEST=$(git tag -l 'v*' --sort=-v:refname | head -1)
+          if [ -z "$LATEST" ]; then
+            MAJOR=0; MINOR=0; PATCH=1
+          else
+            VERSION="${LATEST#v}"
+            MAJOR=$(echo "$VERSION" | cut -d. -f1)
+            MINOR=$(echo "$VERSION" | cut -d. -f2)
+            PATCH=$(echo "$VERSION" | cut -d. -f3)
+            PATCH=$((PATCH + 1))
+          fi
+          NEXT="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "version=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "tag=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "Building version: $NEXT"
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -77,19 +97,10 @@ jobs:
           echo "identity=$IDENTITY" >> "$GITHUB_OUTPUT"
           echo "Signing with: $IDENTITY"
 
-      - name: Extract version from tag
-        id: version
-        run: |
-          TAG="${GITHUB_REF_NAME}"
-          VERSION="${TAG#v}"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Building version: $VERSION"
-
       - name: Build and archive
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           SIGNING_IDENTITY: ${{ steps.identity.outputs.identity }}
-          SPARKLE_PUBLIC_KEY: ${{ secrets.SPARKLE_PUBLIC_KEY }}
         run: |
           xcodebuild archive \
             -scheme Llama \
@@ -100,8 +111,7 @@ jobs:
             MARKETING_VERSION="${{ steps.version.outputs.version }}" \
             DEVELOPMENT_TEAM="$APPLE_TEAM_ID" \
             CODE_SIGN_IDENTITY="$SIGNING_IDENTITY" \
-            CODE_SIGN_STYLE=Manual \
-            SPARKLE_PUBLIC_KEY="$SPARKLE_PUBLIC_KEY"
+            CODE_SIGN_STYLE=Manual
 
       - name: Export signed app
         env:
@@ -203,14 +213,22 @@ jobs:
           echo "$SPARKLE_PRIVATE_KEY" | build/Sparkle-tools/bin/generate_appcast \
             build/appcast-release \
             --ed-key-file - \
-            --download-url-prefix "https://github.com/${{ github.repository }}/releases/download/v${{ steps.version.outputs.version }}/"
+            --download-url-prefix "https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/"
 
           cp build/appcast-release/appcast.xml build/appcast.xml
+
+      - name: Create tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.version }}"
+          git push origin "${{ steps.version.outputs.tag }}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: "v${{ steps.version.outputs.version }}"
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "${{ steps.version.outputs.version }}"
           draft: false
           prerelease: false
           generate_release_notes: true
