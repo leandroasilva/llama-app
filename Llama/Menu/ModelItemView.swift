@@ -340,6 +340,12 @@ final class ModelItemView: ItemView, NSGestureRecognizerDelegate {
         paused: isPaused,
         bytesPerSecond: modelManager.downloadRate(for: model)
       )
+    } else if isLoading {
+      // Model is loading into memory -- show progress feedback
+      subtitleLabel.attributedStringValue = Format.loadingSubtitle()
+    } else if isActive {
+      // Model is active and ready -- show clear indicator
+      subtitleLabel.attributedStringValue = Format.activeSubtitle()
     } else {
       subtitleLabel.attributedStringValue = Format.modelMetadata(
         for: model,
@@ -412,9 +418,11 @@ final class ModelItemView: ItemView, NSGestureRecognizerDelegate {
     // so a cancelled row doesn't flash a chevron for a frame before it goes.
     pausePlayImageView.isHidden = !showAsDownloading
     chevronImageView.isHidden = showAsDownloading || !modelManager.isInstalled(model)
-    // Load/unload button: hover-only for installed models.
+    // Load/unload button: always visible for active models (so users can stop them),
+    // hover-only for inactive installed models.
     let hasModelInstalled = modelManager.isInstalled(model)
-    loadUnloadImageView.isHidden = !(isHighlighted && hasModelInstalled)
+    let isActive = server.isActive(model: model)
+    loadUnloadImageView.isHidden = !hasModelInstalled || (!isActive && !isHighlighted)
   }
 
   override func viewDidChangeEffectiveAppearance() {

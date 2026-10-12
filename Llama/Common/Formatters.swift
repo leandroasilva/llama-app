@@ -265,6 +265,42 @@ extension Format {
     return result
   }
 
+  /// Formats the subtitle shown while a model is loading into memory.
+  /// Uses the same secondary style as other subtitles for visual consistency.
+  static func loadingSubtitle() -> NSAttributedString {
+    NSAttributedString(
+      string: "Loading…",
+      attributes: [
+        .font: Theme.Fonts.secondary,
+        .foregroundColor: Theme.Colors.textSecondary,
+        .paragraphStyle: Theme.noTighteningParagraphStyle,
+      ])
+  }
+
+  /// Formats the subtitle shown when a model is active and ready.
+  /// Green dot + "Active" label makes it immediately clear which model is running.
+  static func activeSubtitle() -> NSAttributedString {
+    let result = NSMutableAttributedString()
+
+    // Green dot indicator
+    let dotAttributes: [NSAttributedString.Key: Any] = [
+      .font: Theme.Fonts.secondary,
+      .foregroundColor: NSColor.systemGreen,
+      .paragraphStyle: Theme.noTighteningParagraphStyle,
+    ]
+    result.append(NSAttributedString(string: "● ", attributes: dotAttributes))
+
+    // "Active" label
+    let labelAttributes: [NSAttributedString.Key: Any] = [
+      .font: Theme.Fonts.secondary,
+      .foregroundColor: NSColor.systemGreen,
+      .paragraphStyle: Theme.noTighteningParagraphStyle,
+    ]
+    result.append(NSAttributedString(string: "Active", attributes: labelAttributes))
+
+    return result
+  }
+
   /// Formats a model's row title: the parsed view of its id
   /// (`ModelIdParser`), mirroring the WebUI's default rendering so the menu
   /// and the WebUI's picker agree. The short name renders as text; params
