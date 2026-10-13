@@ -186,15 +186,22 @@ class LlamaServer {
   }
   // Store observer token for proper cleanup
   private var settingsObserver: NSObjectProtocol?
+  /// The launch spec of the currently running server, so settings changes can
+  /// decide whether a full restart is needed (spec changed) or a surgical
+  /// in-place reload suffices (spec unchanged, only models.ini content changed).
+  private var currentLaunchSpec: LaunchSpec?
 
   init() {
-    // Listen for settings changes to reload server if needed (e.g. sleep timer)
+    // Listen for settings changes and decide whether a full restart is needed.
+    // Most settings (hotkey, HF token, UI prefs) don't affect the launch command,
+    // so restarting the server would just drop the loaded model for nothing.
+    // Only restart when the spec actually changed; otherwise use syncModelList().
     settingsObserver = NotificationCenter.default.addObserver(
       forName: .LBUserSettingsDidChange, object: nil, queue: .main
     ) {
       [weak self] _ in
       MainActor.assumeIsolated {
-        self?.reload()
+        self?.handleSettingsChange()
       }
     }
   }
@@ -288,7 +295,7 @@ class LlamaServer {
   /// environment. `start()` builds one of these and runs it; the settings UI
   /// renders one as a shell command so users can see exactly what's launched
   /// (and so changing a setting visibly changes the command).
-  struct LaunchSpec {
+  struct LaunchSpec: Equatable {
     let executablePath: String
     let arguments: [String]
     /// How many trailing elements of `arguments` came from the user's
@@ -298,6 +305,14 @@ class LlamaServer {
     let extraArgCount: Int
     /// Only the env vars *we* set -- not the full inherited environment.
     let env: [(key: String, value: String)]
+
+    static func == (lhs: LaunchSpec, rhs: LaunchSpec) -> Bool {
+      lhs.executablePath == rhs.executablePath
+        && lhs.arguments == rhs.arguments
+        && lhs.extraArgCount == rhs.extraArgCount
+        && lhs.env.count == rhs.env.count
+        && zip(lhs.env, rhs.env).allSatisfy { $0.0.key == $0.1.key && $0.0.value == $0.1.value }
+    }
 
     /// A reading-friendly rendering of the command: the env vars as plain
     /// `export` statements up top, then the invocation -- the binary and
@@ -531,6 +546,10 @@ class LlamaServer {
       return
     }
 
+    // Remember the spec so settings changes can compare and decide whether a
+    // restart is actually needed, or if an in-place reload suffices.
+    currentLaunchSpec = spec
+
     // Ensure the empty-cache dir referenced by LLAMA_CACHE exists.
     try? FileManager.default.createDirectory(
       atPath: Self.emptyCachePath, withIntermediateDirectories: true)
@@ -624,6 +643,28 @@ class LlamaServer {
     start()
   }
 
+  /// Handles a settings change by comparing the launch spec before and after.
+  /// If the spec changed (e.g. port, bind address, sleep timer), a full restart
+  /// is needed. If the spec is unchanged (e.g. hotkey, HF token, UI prefs),
+  /// only the models.ini content may have changed, so a surgical in-place reload
+  /// via `syncModelList()` suffices — no model unload, no dropped connection.
+  private func handleSettingsChange() {
+    guard state != .idle else { return }
+
+    // Regenerate models.ini first — both paths need it up to date.
+    ModelManager.shared.updateModelsFile()
+
+    // Build the new spec and compare. If it changed, restart; otherwise reload in place.
+    let newSpec = Self.buildLaunchSpec()
+    if newSpec != currentLaunchSpec {
+      logger.info("Launch spec changed — restarting server")
+      reload()
+    } else {
+      logger.info("Launch spec unchanged — reloading model list in place")
+      syncModelList()
+    }
+  }
+
   /// Applies a models.ini change to a running server without a restart, via the
   /// router's in-place reload (`/models?reload=1`). The server reconciles
   /// surgically -- only models whose entry changed or disappeared are unloaded --
@@ -709,9 +750,12 @@ class LlamaServer {
     state == .loading
   }
 
-  /// Checks if the specified model is currently active
+  /// Checks if the specified model is currently active (loaded or sleeping).
+  /// A sleeping model is still in memory and can wake instantly, so it counts
+  /// as "active" from the user's perspective — no reload needed on next use.
   func isActive(model: Model) -> Bool {
-    return modelStatuses[model.id] == .loaded
+    let state = modelStatuses[model.id]
+    return state == .loaded || state == .sleeping
   }
 
   /// Checks if the specified model is currently loading
@@ -768,10 +812,18 @@ class LlamaServer {
     stopStatusPolling()
 
     healthCheckTask = Task {
-      // Poll /models to detect status.
+      // Poll /models to detect status. Adaptive interval: fast (1s) during active
+      // transitions (loading/unloading), slow (15s) when idle to save CPU/battery.
       while !Task.isCancelled {
         await checkStatus()
-        try? await Task.sleep(nanoseconds: 1_000_000_000)
+
+        // Determine poll interval based on current state.
+        let hasLoadingModel = modelStatuses.values.contains { $0 == .loading }
+        let intervalNanos: UInt64 = (state == .loading || hasLoadingModel)
+          ? 1_000_000_000      // 1 second during active transitions
+          : 15_000_000_000     // 15 seconds when idle/stable
+
+        try? await Task.sleep(nanoseconds: intervalNanos)
       }
     }
   }
@@ -784,13 +836,9 @@ class LlamaServer {
   private func checkStatus() async {
     guard let newStatuses = await api.fetchModelStatuses() else { return }
 
-    // If the server reports a model as sleeping (idle timeout reached), unload it
-    // so the UI reflects the freed state. A .sleeping model isn't counted as the
-    // active model, so no extra bookkeeping is needed here.
-    if let sleepingModelId = newStatuses.first(where: { $0.value == .sleeping })?.key {
-      _ = await api.unloadModel(id: sleepingModelId)
-    }
-
+    // Don't unload sleeping models — they're suspended in memory and can wake
+    // instantly. Unloading forces a full reload from disk next time (slow).
+    // Just update the UI to reflect the sleeping state.
     await MainActor.run {
       if self.state == .loading {
         self.state = .running
