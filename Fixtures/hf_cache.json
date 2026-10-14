@@ -166,8 +166,8 @@
       "mmprojFileExists": false,
       "blobsDirExists": false,
       "snapshotsDirExists": false,
-      "repoDirExists": true,
-      "refsMainExists": true
+      "repoDirExists": false,
+      "refsMainExists": false
     }
   }
 }
