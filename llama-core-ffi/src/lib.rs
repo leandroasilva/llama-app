@@ -109,7 +109,10 @@ pub unsafe extern "C" fn llama_core_init(config_json: *const c_char) -> c_int {
         let v = if s.is_empty() {
             Value::Null
         } else {
-            serde_json::from_str(s).unwrap_or(Value::Null)
+            match serde_json::from_str(s) {
+                Ok(v) => v,
+                Err(_) => return -2,
+            }
         };
         if let Ok(mut c) = core().lock() {
             c.config = v;
@@ -165,7 +168,15 @@ pub unsafe extern "C" fn llama_core_call(
         let args: Value = if args_s.is_empty() {
             Value::Null
         } else {
-            serde_json::from_str(args_s).unwrap_or(Value::Null)
+            match serde_json::from_str(args_s) {
+                Ok(v) => v,
+                Err(e) => {
+                    return json!({
+                        "error": "invalidArgs",
+                        "message": format!("failed to parse args JSON: {e}"),
+                    })
+                }
+            }
         };
         dispatch(method, &args)
     }));
@@ -425,91 +436,158 @@ fn dispatch(method: &str, args: &Value) -> Value {
         panic!("intentional panic for tests");
     }
 
-    let arg_str = |key: &str| args.get(key).and_then(Value::as_str).unwrap_or("");
-    let arg_f = |key: &str| args.get(key).and_then(Value::as_f64).unwrap_or(0.0);
-    let arg_i = |key: &str| args.get(key).and_then(Value::as_i64).unwrap_or(0);
+    match method.split('.').next().unwrap_or("") {
+        "ping" => dispatch_ping(method, args),
+        "version" => dispatch_version(method, args),
+        "repo" => dispatch_repo(method, args),
+        "quant" => dispatch_quant(method, args),
+        "gguf" => dispatch_gguf(method, args),
+        "hfCache" => dispatch_hf_cache(method, args),
+        "models" => dispatch_models_scan(method, args),
+        "draftHead" => dispatch_draft_head(method, args),
+        "sidecar" => dispatch_sidecar(method, args),
+        "modelId" => dispatch_model_id(method, args),
+        "model" => dispatch_model(method, args),
+        "contextTier" => dispatch_context_tier(method, args),
+        "resolvedPaths" => dispatch_resolved_paths(method, args),
+        "compat" => dispatch_compat(method, args),
+        "ini" => dispatch_ini(method, args),
+        "aliases" => dispatch_aliases(method, args),
+        "net" => dispatch_net(method, args),
+        "catalog" => dispatch_catalog(method, args),
+        "hfRequest" => dispatch_hf_request(method, args),
+        "engine" => dispatch_engine(method, args),
+        "download" => dispatch_download(method, args),
+        "partial" => dispatch_partial(method, args),
+        "server" => dispatch_server(method, args),
+        "emit" => dispatch_emit(method, args),
+        "core" => dispatch_core(method, args),
+        "event" => dispatch_event(method, args),
+        _ => json!({ "error": format!("unknown method: {method}") }),
+    }
+}
+
+fn arg_str<'a>(args: &'a Value, key: &str) -> &'a str {
+    args.get(key).and_then(Value::as_str).unwrap_or("")
+}
+
+fn arg_f(args: &Value, key: &str) -> f64 {
+    args.get(key).and_then(Value::as_f64).unwrap_or(0.0)
+}
+
+fn arg_i(args: &Value, key: &str) -> i64 {
+    args.get(key).and_then(Value::as_i64).unwrap_or(0)
+}
+
+fn dispatch_ping(method: &str, _args: &Value) -> Value {
     match method {
         "ping" => json!({ "pong": true }),
+        _ => json!({ "error": format!("unknown method: {method}") }),
+    }
+}
 
+fn dispatch_version(method: &str, args: &Value) -> Value {
+    match method {
         "version.parse" => {
-            json!({ "build": LlamaVersion::parse(arg_str("output")).map(|v| v.build) })
+            json!({ "build": LlamaVersion::parse(arg_str(args, "output")).map(|v| v.build) })
         }
+        _ => json!({ "error": format!("unknown method: {method}") }),
+    }
+}
 
-        "repo.parse" => match HFRepoParser::parse(arg_str("repoDir")) {
+fn dispatch_repo(method: &str, args: &Value) -> Value {
+    match method {
+        "repo.parse" => match HFRepoParser::parse(arg_str(args, "repoDir")) {
             Some((org, repo)) => json!({ "org": org, "repo": repo }),
             None => Value::Null,
         },
-        "repo.parseQuant" => json!(HFRepoParser::parse_quant(arg_str("filename"))),
-        "repo.isSplitShard" => json!(HFRepoParser::is_split_shard(arg_str("filename"))),
-        "repo.isFirstShard" => json!(HFRepoParser::is_first_shard(arg_str("filename"))),
-        "repo.shardTotal" => json!(HFRepoParser::shard_total(arg_str("filename"))),
+        "repo.parseQuant" => json!(HFRepoParser::parse_quant(arg_str(args, "filename"))),
+        "repo.isSplitShard" => json!(HFRepoParser::is_split_shard(arg_str(args, "filename"))),
+        "repo.isFirstShard" => json!(HFRepoParser::is_first_shard(arg_str(args, "filename"))),
+        "repo.shardTotal" => json!(HFRepoParser::shard_total(arg_str(args, "filename"))),
         "repo.splitShardBaseName" => {
-            json!(HFRepoParser::split_shard_base_name(arg_str("filename")))
+            json!(HFRepoParser::split_shard_base_name(arg_str(args, "filename")))
         }
+        _ => json!({ "error": format!("unknown method: {method}") }),
+    }
+}
 
-        // ---- Fase 1: GGUF quant ----
+fn dispatch_quant(method: &str, args: &Value) -> Value {
+    match method {
         "quant.parseLabel" => {
-            json!({ "label": GGUFQuant::parse_label(arg_str("path")) })
+            json!({ "label": GGUFQuant::parse_label(arg_str(args, "path")) })
         }
         "quant.tagForPath" => {
             let requested = args.get("requested").and_then(Value::as_str);
-            json!({ "tag": GGUFQuant::tag_for_path(arg_str("path"), requested) })
+            json!({ "tag": GGUFQuant::tag_for_path(arg_str(args, "path"), requested) })
         }
         "quant.quantBitsForPath" => {
-            json!({ "bits": GGUFQuant::quant_bits_for_path(arg_str("path")) })
+            json!({ "bits": GGUFQuant::quant_bits_for_path(arg_str(args, "path")) })
         }
         "quant.quantBitsForTag" => {
-            json!({ "bits": GGUFQuant::quant_bits_for_tag(arg_str("tag")) })
+            json!({ "bits": GGUFQuant::quant_bits_for_tag(arg_str(args, "tag")) })
         }
         "quant.canonicalTag" => {
-            json!({ "tag": GGUFQuant::canonical_tag(arg_str("label")) })
+            json!({ "tag": GGUFQuant::canonical_tag(arg_str(args, "label")) })
         }
         "quant.matches" => {
-            json!({ "value": GGUFQuant::matches(arg_str("a"), arg_str("b")) })
+            json!({ "value": GGUFQuant::matches(arg_str(args, "a"), arg_str(args, "b")) })
         }
+        _ => json!({ "error": format!("unknown method: {method}") }),
+    }
+}
 
-        // ---- Fase 2: GGUF metadata header ----
-        "gguf.contextLength" => match GGUFMetadata::context_length(arg_str("path")) {
+fn dispatch_gguf(method: &str, args: &Value) -> Value {
+    match method {
+        "gguf.contextLength" => match GGUFMetadata::context_length(arg_str(args, "path")) {
             None => Value::Null,
             Some(length) => json!({ "parsed": true, "length": length }),
         },
-        "gguf.hasEmbeddedMTPHead" => match GGUFMetadata::has_embedded_mtp_head(arg_str("path")) {
-            None => Value::Null,
-            Some(value) => json!({ "value": value }),
-        },
-        "gguf.isDecisionModel" => match GGUFMetadata::is_decision_model(arg_str("path")) {
-            None => Value::Null,
-            Some(value) => json!({ "value": value }),
-        },
+        "gguf.hasEmbeddedMTPHead" => {
+            match GGUFMetadata::has_embedded_mtp_head(arg_str(args, "path")) {
+                None => Value::Null,
+                Some(value) => json!({ "value": value }),
+            }
+        }
+        "gguf.isDecisionModel" => {
+            match GGUFMetadata::is_decision_model(arg_str(args, "path")) {
+                None => Value::Null,
+                Some(value) => json!({ "value": value }),
+            }
+        }
+        _ => json!({ "error": format!("unknown method: {method}") }),
+    }
+}
 
-        // ---- Fase 2: HFCache ----
+fn dispatch_hf_cache(method: &str, args: &Value) -> Value {
+    match method {
         "hfCache.repoDirName" => {
-            json!({ "name": HFCache::repo_dir_name_from_url(arg_str("url")) })
+            json!({ "name": HFCache::repo_dir_name_from_url(arg_str(args, "url")) })
         }
         "hfCache.repoRelativePath" => {
-            json!({ "path": HFCache::repo_relative_path_from_url(arg_str("url")) })
+            json!({ "path": HFCache::repo_relative_path_from_url(arg_str(args, "url")) })
         }
         "hfCache.partialDir" => json!({
-            "path": HFCache::partial_dir(arg_str("cacheDir"), arg_str("modelId"))
+            "path": HFCache::partial_dir(arg_str(args, "cacheDir"), arg_str(args, "modelId"))
                 .to_string_lossy()
         }),
         "hfCache.partialPath" => json!({
-            "path": HFCache::partial_path(arg_str("cacheDir"), arg_str("modelId"), arg_str("filename"))
+            "path": HFCache::partial_path(arg_str(args, "cacheDir"), arg_str(args, "modelId"), arg_str(args, "filename"))
                 .to_string_lossy()
         }),
         "hfCache.placeholderURL" => json!({
-            "path": HFCache::placeholder_url(arg_str("cacheDir"), arg_str("modelId"))
+            "path": HFCache::placeholder_url(arg_str(args, "cacheDir"), arg_str(args, "modelId"))
                 .to_string_lossy()
         }),
         "hfCache.removePartials" => {
-            HFCache::remove_partials(arg_str("cacheDir"), arg_str("modelId"));
+            HFCache::remove_partials(arg_str(args, "cacheDir"), arg_str(args, "modelId"));
             json!({ "ok": true })
         }
         "hfCache.partialBytes" => json!({
-            "bytes": HFCache::partial_bytes(arg_str("cacheDir"), arg_str("modelId"))
+            "bytes": HFCache::partial_bytes(arg_str(args, "cacheDir"), arg_str(args, "modelId"))
         }),
         "hfCache.scanPlaceholders" => {
-            let paths: Vec<String> = HFCache::scan_placeholders(arg_str("cacheDir"))
+            let paths: Vec<String> = HFCache::scan_placeholders(arg_str(args, "cacheDir"))
                 .iter()
                 .map(|p| p.to_string_lossy().into_owned())
                 .collect();
@@ -520,22 +598,22 @@ fn dispatch(method: &str, args: &Value) -> Value {
                 strings_from_value(args.get("installedIds").unwrap_or(&Value::Null))
                     .into_iter()
                     .collect();
-            HFCache::clean_installed_partials(arg_str("cacheDir"), &ids);
+            HFCache::clean_installed_partials(arg_str(args, "cacheDir"), &ids);
             json!({ "ok": true })
         }
         "hfCache.snapshotFileExists" => json!({
             "value": HFCache::snapshot_file_exists(
-                arg_str("cacheDir"), arg_str("repoDir"), arg_str("filename")
+                arg_str(args, "cacheDir"), arg_str(args, "repoDir"), arg_str(args, "filename")
             )
         }),
         "hfCache.writeBlobAndLink" => {
             match HFCache::write_blob_and_link(
-                arg_str("cacheDir"),
-                arg_str("repoDir"),
-                arg_str("commit"),
-                arg_str("blobHash"),
-                arg_str("filename"),
-                arg_str("tempFile"),
+                arg_str(args, "cacheDir"),
+                arg_str(args, "repoDir"),
+                arg_str(args, "commit"),
+                arg_str(args, "blobHash"),
+                arg_str(args, "filename"),
+                arg_str(args, "tempFile"),
             ) {
                 Ok(()) => json!({ "ok": true }),
                 Err(e) => json!({ "error": e.to_string() }),
@@ -543,30 +621,33 @@ fn dispatch(method: &str, args: &Value) -> Value {
         }
         "hfCache.deleteModelFiles" => {
             let paths = resolved_paths_from_value(args.get("paths").unwrap_or(&Value::Null));
-            match HFCache::delete_model_files(arg_str("cacheDir"), arg_str("repoDir"), &paths) {
+            match HFCache::delete_model_files(arg_str(args, "cacheDir"), arg_str(args, "repoDir"), &paths) {
                 Ok(()) => json!({ "ok": true }),
                 Err(e) => json!({ "error": e.to_string() }),
             }
         }
         "hfCache.scanForSideloaded" => {
-            let entries: Vec<Value> = HFCache::scan_for_sideloaded(arg_str("cacheDir"))
+            let entries: Vec<Value> = HFCache::scan_for_sideloaded(arg_str(args, "cacheDir"))
                 .iter()
                 .map(sideloaded_entry_to_value)
                 .collect();
             json!({ "entries": entries })
         }
+        _ => json!({ "error": format!("unknown method: {method}") }),
+    }
+}
+
+fn dispatch_models_scan(method: &str, args: &Value) -> Value {
+    match method {
         "models.scan" => {
-            let scan = llama_core::models::scan::scan(arg_str("cacheDir"), arg_str("memCacheDir"));
+            let scan = llama_core::models::scan::scan(arg_str(args, "cacheDir"), arg_str(args, "memCacheDir"));
             let models: Vec<Value> = scan
                 .models
                 .iter()
                 .map(|m| {
                     let mut v = sideloaded_entry_to_value(&m.entry);
                     if let Some(obj) = v.as_object_mut() {
-                        obj.insert(
-                            "ctxBytesPer1kTokens".to_string(),
-                            json!(m.ctx_bytes_per_1k_tokens),
-                        );
+                        obj.insert("ctxBytesPer1kTokens".to_string(), json!(m.ctx_bytes_per_1k_tokens));
                         obj.insert("residentBytes".to_string(), json!(m.resident_bytes));
                     }
                     v
@@ -579,12 +660,16 @@ fn dispatch(method: &str, args: &Value) -> Value {
                 .collect();
             json!({ "models": models, "needsProfile": needs_profile })
         }
+        _ => json!({ "error": format!("unknown method: {method}") }),
+    }
+}
 
-        // ---- Fase 1: DraftHead ----
+fn dispatch_draft_head(method: &str, args: &Value) -> Value {
+    match method {
         "draftHead.fromSidecarPath" => {
-            json!({ "kind": DraftHead::from_sidecar_path(arg_str("path")).map(DraftHead::as_str) })
+            json!({ "kind": DraftHead::from_sidecar_path(arg_str(args, "path")).map(DraftHead::as_str) })
         }
-        "draftHead.describe" => match DraftHead::from_str_name(arg_str("kind")) {
+        "draftHead.describe" => match DraftHead::from_str_name(arg_str(args, "kind")) {
             Some(k) => json!({
                 "prefix": k.sidecar_prefix(),
                 "specType": k.spec_type(),
@@ -594,85 +679,81 @@ fn dispatch(method: &str, args: &Value) -> Value {
             None => Value::Null,
         },
         "draftHead.preferenceOrder" => {
-            json!(DraftHead::PREFERENCE_ORDER
-                .iter()
-                .map(|k| k.as_str())
-                .collect::<Vec<_>>())
+            json!(DraftHead::PREFERENCE_ORDER.iter().map(|k| k.as_str()).collect::<Vec<_>>())
         }
+        _ => json!({ "error": format!("unknown method: {method}") }),
+    }
+}
 
-        // ---- Fase 1: SidecarPicker ----
-        "sidecar.isMmproj" => json!({ "value": SidecarPicker::is_mmproj(arg_str("path")) }),
-        "sidecar.isDraftHead" => json!({ "value": SidecarPicker::is_draft_head(arg_str("path")) }),
+fn dispatch_sidecar(method: &str, args: &Value) -> Value {
+    match method {
+        "sidecar.isMmproj" => json!({ "value": SidecarPicker::is_mmproj(arg_str(args, "path")) }),
+        "sidecar.isDraftHead" => json!({ "value": SidecarPicker::is_draft_head(arg_str(args, "path")) }),
         "sidecar.mmproj" => {
             let names = strings_from_value(args.get("names").unwrap_or(&Value::Null));
-            json!({ "path": SidecarPicker::mmproj(&names, arg_str("mainPath")) })
+            json!({ "path": SidecarPicker::mmproj(&names, arg_str(args, "mainPath")) })
         }
         "sidecar.draftHead" => {
             let names = strings_from_value(args.get("names").unwrap_or(&Value::Null));
             let tag = args.get("tag").and_then(Value::as_str);
-            json!({ "path": SidecarPicker::draft_head(&names, arg_str("mainPath"), tag) })
+            json!({ "path": SidecarPicker::draft_head(&names, arg_str(args, "mainPath"), tag) })
         }
+        _ => json!({ "error": format!("unknown method: {method}") }),
+    }
+}
 
-        // ---- Fase 1: ModelIdParser ----
-        "modelId.parse" => parsed_to_value(&ModelIdParser::parse(arg_str("id"))),
+fn dispatch_model_id(method: &str, args: &Value) -> Value {
+    match method {
+        "modelId.parse" => parsed_to_value(&ModelIdParser::parse(arg_str(args, "id"))),
         "modelId.plainName" => {
-            let show_tags = args
-                .get("showTags")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            json!({ "name": ModelIdParser::parse(arg_str("id")).plain_name(show_tags) })
+            let show_tags = args.get("showTags").and_then(Value::as_bool).unwrap_or(false);
+            json!({ "name": ModelIdParser::parse(arg_str(args, "id")).plain_name(show_tags) })
         }
         "modelId.displayKey" => {
-            json!({ "key": ModelIdParser::parse(arg_str("id")).display_key() })
+            json!({ "key": ModelIdParser::parse(arg_str(args, "id")).display_key() })
         }
+        _ => json!({ "error": format!("unknown method: {method}") }),
+    }
+}
 
-        // ---- Fase 1: Model id/sort helpers ----
+fn dispatch_model(method: &str, args: &Value) -> Value {
+    match method {
         "model.makeId" => json!({
-            "id": model::make_id(arg_str("org"), arg_str("repo"), arg_str("tag"))
+            "id": model::make_id(arg_str(args, "org"), arg_str(args, "repo"), arg_str(args, "tag"))
         }),
-        "model.idBaseOf" => json!({ "base": model::id_base_of(arg_str("id")) }),
-        "model.sortKey" => json!({ "key": model::sort_key(arg_str("id")) }),
+        "model.idBaseOf" => json!({ "base": model::id_base_of(arg_str(args, "id")) }),
+        "model.sortKey" => json!({ "key": model::sort_key(arg_str(args, "id")) }),
         "model.displayOrder" => {
-            let order = model::display_order(arg_str("lhsId"), arg_str("rhsId"));
+            let order = model::display_order(arg_str(args, "lhsId"), arg_str(args, "rhsId"));
             json!({ "order": order as i32 })
         }
+        _ => json!({ "error": format!("unknown method: {method}") }),
+    }
+}
 
-        // ---- Fase 1: ContextTier ----
+fn dispatch_context_tier(method: &str, _args: &Value) -> Value {
+    match method {
         "contextTier.list" => {
             let tiers: Vec<Value> = ContextTier::ALL
                 .iter()
-                .map(|t| {
-                    json!({
-                        "rawValue": t.raw_value(),
-                        "shortLabel": t.short_label(),
-                        "label": t.label(),
-                        "suffix": t.suffix(),
-                    })
-                })
+                .map(|t| json!({ "rawValue": t.raw_value(), "shortLabel": t.short_label(), "label": t.label(), "suffix": t.suffix() }))
                 .collect();
             Value::Array(tiers)
         }
+        _ => json!({ "error": format!("unknown method: {method}") }),
+    }
+}
 
-        // ---- Fase 1: ResolvedPaths ----
+fn dispatch_resolved_paths(method: &str, args: &Value) -> Value {
+    match method {
         "resolvedPaths.allPaths" => {
             let rp = ResolvedPaths {
-                model_file: arg_str("modelFile").to_string(),
-                additional_parts: strings_from_value(
-                    args.get("additionalParts").unwrap_or(&Value::Null),
-                ),
-                mmproj_file: args
-                    .get("mmprojFile")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-                uses_mtp: args
-                    .get("usesMTP")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false),
-                draft_sidecar_file: args
-                    .get("draftSidecarFile")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-                hf_repo_dir_name: arg_str("hfRepoDirName").to_string(),
+                model_file: arg_str(args, "modelFile").to_string(),
+                additional_parts: strings_from_value(args.get("additionalParts").unwrap_or(&Value::Null)),
+                mmproj_file: args.get("mmprojFile").and_then(Value::as_str).map(str::to_string),
+                uses_mtp: args.get("usesMTP").and_then(Value::as_bool).unwrap_or(false),
+                draft_sidecar_file: args.get("draftSidecarFile").and_then(Value::as_str).map(str::to_string),
+                hf_repo_dir_name: arg_str(args, "hfRepoDirName").to_string(),
             };
             json!({ "paths": rp.all_paths() })
         }
@@ -682,98 +763,62 @@ fn dispatch(method: &str, args: &Value) -> Value {
                 additional_parts: vec![],
                 mmproj_file: None,
                 uses_mtp: false,
-                draft_sidecar_file: args
-                    .get("draftSidecarFile")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
+                draft_sidecar_file: args.get("draftSidecarFile").and_then(Value::as_str).map(str::to_string),
                 hf_repo_dir_name: String::new(),
             };
             json!({ "kind": rp.draft_sidecar_kind().map(DraftHead::as_str) })
         }
+        _ => json!({ "error": format!("unknown method: {method}") }),
+    }
+}
 
-        // ---- Fase 1: Model+Compatibility ----
+fn dispatch_compat(method: &str, args: &Value) -> Value {
+    match method {
         "compat.deviceBudget" => {
-            let use_full = args
-                .get("useFullWorkingSet")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            json!({ "mb": llama_core::models::compat::device_memory_budget_mb(
-                arg_f("workingSetMb"), arg_f("physicalMb"), use_full
-            ) })
+            let use_full = args.get("useFullWorkingSet").and_then(Value::as_bool).unwrap_or(false);
+            json!({ "mb": llama_core::models::compat::device_memory_budget_mb(arg_f(args, "workingSetMb"), arg_f(args, "physicalMb"), use_full) })
         }
         "compat.fitTarget" => {
-            json!({ "mb": llama_core::models::compat::fit_target_mb(arg_f("workingSetMb"), arg_f("budgetMb")) })
+            json!({ "mb": llama_core::models::compat::fit_target_mb(arg_f(args, "workingSetMb"), arg_f(args, "budgetMb")) })
         }
         "compat.estimatedWeightFits" => {
             let bytes = args.get("bytes").and_then(Value::as_i64);
-            json!({ "value": llama_core::models::compat::estimated_weight_fits(bytes, arg_f("budgetMb")) })
+            json!({ "value": llama_core::models::compat::estimated_weight_fits(bytes, arg_f(args, "budgetMb")) })
         }
         "compat.info" => {
-            let mem = ModelMem {
-                ctx_window: arg_i("ctxWindow"),
-                file_size: arg_i("fileSize"),
-                ctx_bytes_per_1k_tokens: arg_i("ctxBytesPer1kTokens"),
-                resident_bytes: arg_i("residentBytes"),
-            };
-            let info = mem.compatibility_info(arg_f("ctxWindowTokens"), arg_f("budgetMb"));
-            json!({
-                "isCompatible": info.is_compatible,
-                "incompatibilitySummary": info.incompatibility_summary,
-            })
+            let mem = ModelMem { ctx_window: arg_i(args, "ctxWindow"), file_size: arg_i(args, "fileSize"), ctx_bytes_per_1k_tokens: arg_i(args, "ctxBytesPer1kTokens"), resident_bytes: arg_i(args, "residentBytes") };
+            let info = mem.compatibility_info(arg_f(args, "ctxWindowTokens"), arg_f(args, "budgetMb"));
+            json!({ "isCompatible": info.is_compatible, "incompatibilitySummary": info.incompatibility_summary })
         }
         "compat.runtimeMemoryMb" => {
-            let mem = ModelMem {
-                ctx_window: arg_i("ctxWindow"),
-                file_size: arg_i("fileSize"),
-                ctx_bytes_per_1k_tokens: arg_i("ctxBytesPer1kTokens"),
-                resident_bytes: arg_i("residentBytes"),
-            };
-            json!({ "mb": mem.runtime_memory_usage_mb(arg_f("ctxWindowTokens")) })
+            let mem = ModelMem { ctx_window: arg_i(args, "ctxWindow"), file_size: arg_i(args, "fileSize"), ctx_bytes_per_1k_tokens: arg_i(args, "ctxBytesPer1kTokens"), resident_bytes: arg_i(args, "residentBytes") };
+            json!({ "mb": mem.runtime_memory_usage_mb(arg_f(args, "ctxWindowTokens")) })
         }
         "compat.supportedTiers" => {
-            let mem = ModelMem {
-                ctx_window: arg_i("ctxWindow"),
-                file_size: arg_i("fileSize"),
-                ctx_bytes_per_1k_tokens: arg_i("ctxBytesPer1kTokens"),
-                resident_bytes: arg_i("residentBytes"),
-            };
-            json!({ "tiers": tiers_to_value(&mem.supported_context_tiers(arg_f("budgetMb"))) })
+            let mem = ModelMem { ctx_window: arg_i(args, "ctxWindow"), file_size: arg_i(args, "fileSize"), ctx_bytes_per_1k_tokens: arg_i(args, "ctxBytesPer1kTokens"), resident_bytes: arg_i(args, "residentBytes") };
+            json!({ "tiers": tiers_to_value(&mem.supported_context_tiers(arg_f(args, "budgetMb"))) })
         }
         "compat.displayTiers" => {
-            let mem = ModelMem {
-                ctx_window: arg_i("ctxWindow"),
-                file_size: arg_i("fileSize"),
-                ctx_bytes_per_1k_tokens: arg_i("ctxBytesPer1kTokens"),
-                resident_bytes: arg_i("residentBytes"),
-            };
+            let mem = ModelMem { ctx_window: arg_i(args, "ctxWindow"), file_size: arg_i(args, "fileSize"), ctx_bytes_per_1k_tokens: arg_i(args, "ctxBytesPer1kTokens"), resident_bytes: arg_i(args, "residentBytes") };
             json!({ "tiers": tiers_to_value(&mem.display_context_tiers()) })
         }
         "compat.nativeMaxTier" => {
-            let mem = ModelMem {
-                ctx_window: arg_i("ctxWindow"),
-                file_size: 0,
-                ctx_bytes_per_1k_tokens: 0,
-                resident_bytes: 0,
-            };
+            let mem = ModelMem { ctx_window: arg_i(args, "ctxWindow"), file_size: 0, ctx_bytes_per_1k_tokens: 0, resident_bytes: 0 };
             json!({ "tier": mem.native_max_tier().map(|t| t.raw_value()) })
         }
         "compat.effectiveTier" => {
-            let mem = ModelMem {
-                ctx_window: arg_i("ctxWindow"),
-                file_size: arg_i("fileSize"),
-                ctx_bytes_per_1k_tokens: arg_i("ctxBytesPer1kTokens"),
-                resident_bytes: arg_i("residentBytes"),
-            };
-            let selected = args
-                .get("selected")
-                .and_then(Value::as_i64)
-                .and_then(ContextTier::from_raw);
-            json!({ "tier": mem.effective_ctx_tier(arg_f("budgetMb"), selected).map(|t| t.raw_value()) })
+            let mem = ModelMem { ctx_window: arg_i(args, "ctxWindow"), file_size: arg_i(args, "fileSize"), ctx_bytes_per_1k_tokens: arg_i(args, "ctxBytesPer1kTokens"), resident_bytes: arg_i(args, "residentBytes") };
+            let selected = args.get("selected").and_then(Value::as_i64).and_then(ContextTier::from_raw);
+            json!({ "tier": mem.effective_ctx_tier(arg_f(args, "budgetMb"), selected).map(|t| t.raw_value()) })
         }
+        _ => json!({ "error": format!("unknown method: {method}") }),
+    }
+}
 
-        // ---- Fase 1: UserModelOverrides (pure INI) ----
+fn dispatch_ini(method: &str, args: &Value) -> Value {
+    match method {
         "ini.parse" => {
-            let sections = ini::parse(arg_str("text"));
+            let sections = ini::parse(arg_str(args, "text"));
             json!({ "sections": sections_to_value(&sections) })
         }
         "ini.serialize" => {
@@ -784,54 +829,28 @@ fn dispatch(method: &str, args: &Value) -> Value {
         "ini.apply" => {
             let generated = sections_from_value(args.get("generated").unwrap_or(&Value::Null));
             let overrides = sections_from_value(args.get("overrides").unwrap_or(&Value::Null));
-            let suspended = args
-                .get("suspended")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
+            let suspended = args.get("suspended").and_then(Value::as_bool).unwrap_or(false);
             json!({ "sections": sections_to_value(&ini::apply(&generated, &overrides, suspended)) })
         }
+        _ => json!({ "error": format!("unknown method: {method}") }),
+    }
+}
 
-        // ---- Fase 1: ModelAliases (pure) ----
+fn dispatch_aliases(method: &str, args: &Value) -> Value {
+    match method {
         "aliases.validationError" => {
-            let aliases: Vec<aliases::Alias> = args
-                .get("aliases")
-                .and_then(Value::as_array)
-                .map(|a| {
-                    a.iter()
-                        .map(|v| aliases::Alias {
-                            name: v
-                                .get("name")
-                                .and_then(Value::as_str)
-                                .unwrap_or("")
-                                .to_string(),
-                            model_id: v
-                                .get("modelId")
-                                .and_then(Value::as_str)
-                                .unwrap_or("")
-                                .to_string(),
-                        })
-                        .collect()
-                })
+            let aliases: Vec<aliases::Alias> = args.get("aliases").and_then(Value::as_array)
+                .map(|a| a.iter().map(|v| aliases::Alias {
+                    name: v.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
+                    model_id: v.get("modelId").and_then(Value::as_str).unwrap_or("").to_string(),
+                }).collect())
                 .unwrap_or_default();
-            let replacing = args.get("replacing").and_then(|v| {
-                v.as_object().map(|o| aliases::Alias {
-                    name: o
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
-                    model_id: o
-                        .get("modelId")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string(),
-                })
-            });
-            let override_names =
-                strings_from_value(args.get("overrideNames").unwrap_or(&Value::Null));
-            json!({ "error": aliases::validation_error(
-                arg_str("name"), &aliases, replacing.as_ref(), &override_names
-            ) })
+            let replacing = args.get("replacing").and_then(|v| v.as_object().map(|o| aliases::Alias {
+                name: o.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
+                model_id: o.get("modelId").and_then(Value::as_str).unwrap_or("").to_string(),
+            }));
+            let override_names = strings_from_value(args.get("overrideNames").unwrap_or(&Value::Null));
+            json!({ "error": aliases::validation_error(arg_str(args, "name"), &aliases, replacing.as_ref(), &override_names) })
         }
         "aliases.removeConflicts" => {
             let sections = sections_from_value(args.get("sections").unwrap_or(&Value::Null));
@@ -843,19 +862,36 @@ fn dispatch(method: &str, args: &Value) -> Value {
             aliases::set_alias(&mut section, &names);
             json!({ "section": section_to_value(&section) })
         }
+        _ => json!({ "error": format!("unknown method: {method}") }),
+    }
+}
 
-        // ---- Fase 3: network + remote selection ----
+fn dispatch_net(method: &str, args: &Value) -> Value {
+    match method {
         "net.resolveFromSiblings" => {
             let requested = args.get("requestedQuant").and_then(Value::as_str);
             let siblings = siblings_from_value(args.get("siblings").unwrap_or(&Value::Null));
-            match resolve_from_siblings(arg_str("repo"), requested, &siblings, arg_f("budgetMb")) {
+            match resolve_from_siblings(arg_str(args, "repo"), requested, &siblings, arg_f(args, "budgetMb")) {
                 Ok(r) => resolved_to_value(&r),
                 Err(e) => resolve_error_to_value(&e),
             }
         }
-        "net.resolveUrl" => {
-            json!({ "url": resolve_url(arg_str("repo"), arg_str("path")) })
+        "net.resolveUrl" => json!({ "url": resolve_url(arg_str(args, "repo"), arg_str(args, "path")) }),
+        "net.blobHash" => json!({ "hash": blob_hash(&response_from_value(args)) }),
+        "net.commitHash" => json!({ "hash": commit_hash(&response_from_value(args)) }),
+        "net.fileMetadata" => {
+            let meta = file_metadata(&response_from_value(args)).map(|m| json!({ "blobHash": m.blob_hash, "commitHash": m.commit_hash }));
+            json!({ "metadata": meta })
         }
+        "net.sameHostRedirect" => json!({
+            "value": same_host_redirect(args.get("from").and_then(Value::as_str), args.get("to").and_then(Value::as_str))
+        }),
+        _ => json!({ "error": format!("unknown method: {method}") }),
+    }
+}
+
+fn dispatch_catalog(method: &str, args: &Value) -> Value {
+    match method {
         "catalog.parseBytes" => {
             let label = args.get("label").and_then(Value::as_str);
             json!({ "bytes": catalog::parse_bytes(label) })
@@ -864,536 +900,323 @@ fn dispatch(method: &str, args: &Value) -> Value {
             let families = families_from_value(args.get("families").unwrap_or(&Value::Null));
             let suggestions = catalog::featured_suggestions(
                 &families,
-                arg_f("budgetMb"),
-                arg_i("systemMemoryMb") as u64,
+                arg_f(args, "budgetMb"),
+                arg_i(args, "systemMemoryMb") as u64,
             );
             json!({ "suggestions": suggestions_to_value(&suggestions) })
         }
+        _ => json!({ "error": format!("unknown method: {method}") }),
+    }
+}
+
+fn dispatch_hf_request(method: &str, args: &Value) -> Value {
+    match method {
         "hfRequest.userAgent" => json!({
-            "ua": hf_request::user_agent(arg_str("shortVersion"), arg_i("osMajor"), arg_i("osMinor"))
+            "ua": hf_request::user_agent(arg_str(args, "shortVersion"), arg_i(args, "osMajor"), arg_i(args, "osMinor"))
         }),
         "hfRequest.make" => {
             let token = args.get("token").and_then(Value::as_str);
-            let headers: Vec<Value> = hf_request::make(arg_str("url"), token, arg_str("userAgent"))
-                .iter()
-                .map(|(k, v)| json!([k, v]))
-                .collect();
+            let headers: Vec<Value> = hf_request::make(arg_str(args, "url"), token, arg_str(args, "userAgent"))
+                .iter().map(|(k, v)| json!([k, v])).collect();
             json!({ "headers": headers })
         }
-        "net.blobHash" => json!({ "hash": blob_hash(&response_from_value(args)) }),
-        "net.commitHash" => json!({ "hash": commit_hash(&response_from_value(args)) }),
-        "net.fileMetadata" => {
-            let meta = file_metadata(&response_from_value(args))
-                .map(|m| json!({ "blobHash": m.blob_hash, "commitHash": m.commit_hash }));
-            json!({ "metadata": meta })
-        }
-        "net.sameHostRedirect" => json!({
-            "value": same_host_redirect(
-                args.get("from").and_then(Value::as_str),
-                args.get("to").and_then(Value::as_str),
-            )
-        }),
+        _ => json!({ "error": format!("unknown method: {method}") }),
+    }
+}
 
-        // ---- Fase 4: Engine (LlamaBinaries / LlamaInstaller leaves / MemProfile) ----
-        "engine.managedPath" => json!({
-            "path": binaries::managed_path(arg_str("home"))
-        }),
-        "engine.metalConfig" => match installer::metal_config(arg_str("brand")) {
+fn dispatch_engine(method: &str, args: &Value) -> Value {
+    match method {
+        "engine.managedPath" => json!({ "path": binaries::managed_path(arg_str(args, "home")) }),
+        "engine.metalConfig" => match installer::metal_config(arg_str(args, "brand")) {
             Ok(config) => json!({ "config": config }),
             Err(e) => json!({ "error": e.kind(), "message": e.message() }),
         },
-        "engine.artifactUrl" => json!({
-            "url": installer::artifact_url(arg_str("version"), arg_str("config"))
-        }),
-        "engine.unzstdUrl" => json!({
-            "url": installer::unzstd_url(arg_str("version"))
-        }),
+        "engine.artifactUrl" => json!({ "url": installer::artifact_url(arg_str(args, "version"), arg_str(args, "config")) }),
+        "engine.unzstdUrl" => json!({ "url": installer::unzstd_url(arg_str(args, "version")) }),
         "engine.binariesResolve" => {
-            let unmanaged_dirs: Vec<String> =
-                match args.get("unmanagedDirs").and_then(Value::as_array) {
-                    // An array is used verbatim (empty = "search nothing") so the
-                    // host can pin a temp dir in tests; absent defaults to the
-                    // Well-Known Homebrew dirs for real use.
-                    Some(a) => a
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_string)
-                        .collect(),
-                    None => binaries::UNMANAGED_DIRS
-                        .iter()
-                        .map(|s| s.to_string())
-                        .collect(),
-                };
-            let ignore = args
-                .get("ignoreUnmanaged")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            match binaries::resolve(arg_str("home"), &unmanaged_dirs, ignore) {
+            let unmanaged_dirs: Vec<String> = match args.get("unmanagedDirs").and_then(Value::as_array) {
+                Some(a) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
+                None => binaries::UNMANAGED_DIRS.iter().map(|s| s.to_string()).collect(),
+            };
+            let ignore = args.get("ignoreUnmanaged").and_then(Value::as_bool).unwrap_or(false);
+            match binaries::resolve(arg_str(args, "home"), &unmanaged_dirs, ignore) {
                 Some((path, origin)) => json!({ "origin": origin.as_str(), "path": path }),
                 None => Value::Null,
             }
         }
-        "engine.readVersion" => json!({
-            "build": binaries::read_version(arg_str("path")).map(|v| v.build)
-        }),
-        "engine.decompress" => {
-            match installer::decompress(arg_str("unzstd"), arg_str("zst"), arg_str("dest")) {
-                Ok(()) => json!({ "ok": true }),
-                Err(e) => json!({ "error": e.kind(), "message": e.message() }),
-            }
-        }
-        "engine.atomicInstall" => {
-            match installer::atomic_install(arg_str("src"), arg_str("dest")) {
-                Ok(()) => json!({ "ok": true }),
-                Err(e) => json!({ "error": e.kind(), "message": e.message() }),
-            }
-        }
-        "engine.ensurePathSymlink" => {
-            match installer::ensure_path_symlink(arg_str("home"), arg_str("llamaPath")) {
-                installer::PathSymlinkOutcome::Linked => json!({ "outcome": "linked" }),
-                installer::PathSymlinkOutcome::LeftExisting => {
-                    json!({ "outcome": "leftExisting" })
-                }
-                installer::PathSymlinkOutcome::Failed(message) => {
-                    json!({ "outcome": "failed", "message": message })
-                }
-            }
-        }
+        "engine.readVersion" => json!({ "build": binaries::read_version(arg_str(args, "path")).map(|v| v.build) }),
+        "engine.decompress" => match installer::decompress(arg_str(args, "unzstd"), arg_str(args, "zst"), arg_str(args, "dest")) {
+            Ok(()) => json!({ "ok": true }),
+            Err(e) => json!({ "error": e.kind(), "message": e.message() }),
+        },
+        "engine.atomicInstall" => match installer::atomic_install(arg_str(args, "src"), arg_str(args, "dest")) {
+            Ok(()) => json!({ "ok": true }),
+            Err(e) => json!({ "error": e.kind(), "message": e.message() }),
+        },
+        "engine.ensurePathSymlink" => match installer::ensure_path_symlink(arg_str(args, "home"), arg_str(args, "llamaPath")) {
+            installer::PathSymlinkOutcome::Linked => json!({ "outcome": "linked" }),
+            installer::PathSymlinkOutcome::LeftExisting => json!({ "outcome": "leftExisting" }),
+            installer::PathSymlinkOutcome::Failed(message) => json!({ "outcome": "failed", "message": message }),
+        },
         "engine.promoteStaged" => {
-            let target = LlamaVersion {
-                build: arg_i("targetBuild"),
-            };
-            match installer::promote_staged(
-                arg_str("staged"),
-                arg_str("live"),
-                target,
-                arg_str("home"),
-            ) {
+            let target = LlamaVersion { build: arg_i(args, "targetBuild") };
+            match installer::promote_staged(arg_str(args, "staged"), arg_str(args, "live"), target, arg_str(args, "home")) {
                 installer::PromoteOutcome::NothingStaged => json!({ "outcome": "nothingStaged" }),
-                installer::PromoteOutcome::DiscardedStale => {
-                    json!({ "outcome": "discardedStale" })
-                }
-                installer::PromoteOutcome::Failed(message) => {
-                    json!({ "outcome": "failed", "message": message })
-                }
+                installer::PromoteOutcome::DiscardedStale => json!({ "outcome": "discardedStale" }),
+                installer::PromoteOutcome::Failed(message) => json!({ "outcome": "failed", "message": message }),
                 installer::PromoteOutcome::Promoted => json!({ "outcome": "promoted" }),
             }
         }
-        "engine.fit" => {
-            match mem_profile::fit(
-                arg_i("loMib"),
-                arg_i("hiMib"),
-                arg_i("ctxLo"),
-                arg_i("ctxHi"),
-            ) {
-                Some(p) => json!({
-                    "profile": {
-                        "ctxBytesPer1kTokens": p.ctx_bytes_per_1k_tokens,
-                        "residentBytes": p.resident_bytes,
-                        "schemaVersion": p.schema_version,
-                    }
-                }),
-                None => Value::Null,
-            }
-        }
-        "engine.parseFitp" => json!({ "sum": mem_profile::parse_fitp_output(arg_str("output")) }),
-        "engine.memCacheFileName" => {
-            json!({ "hash": mem_profile::cache_file_name(arg_str("modelId")) })
-        }
-        "engine.memCachePath" => {
-            json!({ "path": mem_profile::cache_path(arg_str("cacheDir"), arg_str("modelId")) })
-        }
-        "engine.memCacheGet" => {
-            match mem_profile::cache_get(arg_str("cacheDir"), arg_str("modelId")) {
-                Some(p) => json!({
-                    "profile": {
-                        "ctxBytesPer1kTokens": p.ctx_bytes_per_1k_tokens,
-                        "residentBytes": p.resident_bytes,
-                        "schemaVersion": p.schema_version,
-                    }
-                }),
-                None => json!({ "profile": Value::Null }),
-            }
-        }
+        "engine.fit" => match mem_profile::fit(arg_i(args, "loMib"), arg_i(args, "hiMib"), arg_i(args, "ctxLo"), arg_i(args, "ctxHi")) {
+            Some(p) => json!({ "profile": { "ctxBytesPer1kTokens": p.ctx_bytes_per_1k_tokens, "residentBytes": p.resident_bytes, "schemaVersion": p.schema_version } }),
+            None => Value::Null,
+        },
+        "engine.parseFitp" => json!({ "sum": mem_profile::parse_fitp_output(arg_str(args, "output")) }),
+        "engine.memCacheFileName" => json!({ "hash": mem_profile::cache_file_name(arg_str(args, "modelId")) }),
+        "engine.memCachePath" => json!({ "path": mem_profile::cache_path(arg_str(args, "cacheDir"), arg_str(args, "modelId")) }),
+        "engine.memCacheGet" => match mem_profile::cache_get(arg_str(args, "cacheDir"), arg_str(args, "modelId")) {
+            Some(p) => json!({ "profile": { "ctxBytesPer1kTokens": p.ctx_bytes_per_1k_tokens, "residentBytes": p.resident_bytes, "schemaVersion": p.schema_version } }),
+            None => json!({ "profile": Value::Null }),
+        },
         "engine.memCacheSet" => {
-            let profile =
-                mem_profile::MemProfile::new(arg_i("ctxBytesPer1kTokens"), arg_i("residentBytes"));
-            match mem_profile::cache_set(arg_str("cacheDir"), arg_str("modelId"), &profile) {
+            let profile = mem_profile::MemProfile::new(arg_i(args, "ctxBytesPer1kTokens"), arg_i(args, "residentBytes"));
+            match mem_profile::cache_set(arg_str(args, "cacheDir"), arg_str(args, "modelId"), &profile) {
                 Ok(()) => json!({ "ok": true }),
                 Err(message) => json!({ "error": message }),
             }
         }
+        _ => json!({ "error": format!("unknown method: {method}") }),
+    }
+}
 
-        // ---- Fase 5: Download engine (ModelManager+Transfer leaves, ActiveDownload, DownloadError) ----
+fn dispatch_download(method: &str, args: &Value) -> Value {
+    match method {
         "download.extractFullSize" => {
-            let headers: Vec<(String, String)> = match args.get("headers").and_then(Value::as_array)
-            {
-                Some(a) => a
-                    .iter()
-                    .filter_map(|pair| {
-                        let p = pair.as_array()?;
-                        Some((
-                            p.first()?.as_str()?.to_string(),
-                            p.get(1)?.as_str()?.to_string(),
-                        ))
-                    })
-                    .collect(),
+            let headers: Vec<(String, String)> = match args.get("headers").and_then(Value::as_array) {
+                Some(a) => a.iter().filter_map(|pair| {
+                    let p = pair.as_array()?;
+                    Some((p.first()?.as_str()?.to_string(), p.get(1)?.as_str()?.to_string()))
+                }).collect(),
                 None => Vec::new(),
             };
-            json!({ "size": download::extract_full_size(arg_i("status"), &headers) })
+            json!({ "size": download::extract_full_size(arg_i(args, "status"), &headers) })
         }
-        "download.userMessage" => json!({ "message": download::user_message(arg_i("status")) }),
-        "download.isTransient" => {
-            json!({ "transient": download::is_transient_error(arg_i("code")) })
-        }
+        "download.userMessage" => json!({ "message": download::user_message(arg_i(args, "status")) }),
+        "download.isTransient" => json!({ "transient": download::is_transient_error(arg_i(args, "code")) }),
         "download.retryDelay" => {
-            let base = args
-                .get("base")
-                .and_then(Value::as_f64)
-                .unwrap_or(download::BASE_RETRY_DELAY);
-            json!({ "delay": download::retry_delay_seconds(arg_i("attempts"), base) })
+            let base = args.get("base").and_then(Value::as_f64).unwrap_or(download::BASE_RETRY_DELAY);
+            json!({ "delay": download::retry_delay_seconds(arg_i(args, "attempts"), base) })
         }
         "download.transientDecision" => {
             let decision = download::transient_decision(
-                args.get("isNetworkAvailable")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(true),
-                arg_i("attempts"),
-                args.get("maxAttempts")
-                    .and_then(Value::as_i64)
-                    .unwrap_or(download::MAX_RETRY_ATTEMPTS),
+                args.get("isNetworkAvailable").and_then(Value::as_bool).unwrap_or(true),
+                arg_i(args, "attempts"),
+                args.get("maxAttempts").and_then(Value::as_i64).unwrap_or(download::MAX_RETRY_ATTEMPTS),
             );
             match decision {
                 download::TransientDecision::Retry => json!({ "outcome": "retry" }),
-                download::TransientDecision::Park {
-                    resume_on_reconnect,
-                } => {
-                    json!({ "outcome": "park", "resumeOnReconnect": resume_on_reconnect })
-                }
+                download::TransientDecision::Park { resume_on_reconnect } => json!({ "outcome": "park", "resumeOnReconnect": resume_on_reconnect }),
             }
         }
         "download.refreshProgress" => {
-            let s = download::refresh_progress(
-                arg_i("totalUnitCount"),
-                arg_i("completedFilesBytes"),
-                arg_i("activeBytes"),
-                arg_i("expectedActiveBytes"),
-            );
-            json!({
-                "totalUnitCount": s.total_unit_count,
-                "completedUnitCount": s.completed_unit_count,
-            })
+            let s = download::refresh_progress(arg_i(args, "totalUnitCount"), arg_i(args, "completedFilesBytes"), arg_i(args, "activeBytes"), arg_i(args, "expectedActiveBytes"));
+            json!({ "totalUnitCount": s.total_unit_count, "completedUnitCount": s.completed_unit_count })
         }
         "download.rate" => {
             let samples: Vec<(f64, i64)> = match args.get("samples").and_then(Value::as_array) {
-                Some(a) => a
-                    .iter()
-                    .filter_map(|s| {
-                        let s = s.as_array()?;
-                        Some((s.first()?.as_f64()?, s.get(1)?.as_i64()?))
-                    })
-                    .collect(),
+                Some(a) => a.iter().filter_map(|s| { let s = s.as_array()?; Some((s.first()?.as_f64()?, s.get(1)?.as_i64()?)) }).collect(),
                 None => Vec::new(),
             };
-            let window = args.get("window").and_then(Value::as_f64).unwrap_or(5.0); // ActiveDownload.rateWindow
+            let window = args.get("window").and_then(Value::as_f64).unwrap_or(5.0);
             json!({ "rate": download::rate_bytes_per_second(&samples, window) })
         }
         "download.errorMessage" => {
-            let e = if arg_str("kind") == "notCompatible" {
-                download::DownloadError::NotCompatible(arg_str("reason").to_string())
+            let e = if arg_str(args, "kind") == "notCompatible" {
+                download::DownloadError::NotCompatible(arg_str(args, "reason").to_string())
             } else {
-                download::DownloadError::NotEnoughDiskSpace {
-                    required: arg_str("required").to_string(),
-                    available: arg_str("available").to_string(),
-                }
+                download::DownloadError::NotEnoughDiskSpace { required: arg_str(args, "required").to_string(), available: arg_str(args, "available").to_string() }
             };
-            json!({
-                "description": e.description(),
-                "recovery": e.recovery_suggestion(),
-            })
+            json!({ "description": e.description(), "recovery": e.recovery_suggestion() })
         }
-        "download.verifyHash" => json!({
-            "matches": download::expected_hash_matches(arg_str("computed"), arg_str("expected"))
-        }),
-        "download.isTooSmall" => json!({ "tooSmall": download::is_too_small(arg_i("size")) }),
+        "download.verifyHash" => json!({ "matches": download::expected_hash_matches(arg_str(args, "computed"), arg_str(args, "expected")) }),
+        "download.isTooSmall" => json!({ "tooSmall": download::is_too_small(arg_i(args, "size")) }),
+        _ => json!({ "error": format!("unknown method: {method}") }),
+    }
+}
 
-        // ---- Fase 5: partial file writer (streaming + resume re-hash) ----
-        "partial.sha256" => {
-            json!({ "hex": partial_writer::sha256_hex(arg_str("text").as_bytes()) })
-        }
-        "partial.feedHash" => match partial_writer::feed_sha256(arg_str("path")) {
+fn dispatch_partial(method: &str, args: &Value) -> Value {
+    match method {
+        "partial.sha256" => json!({ "hex": partial_writer::sha256_hex(arg_str(args, "text").as_bytes()) }),
+        "partial.feedHash" => match partial_writer::feed_sha256(arg_str(args, "path")) {
             Ok(digest) => json!({ "digest": digest }),
             Err(e) => json!({ "error": e.kind(), "message": e.message() }),
         },
         "partial.open" => {
-            let expected = args
-                .get("expectedBlobHash")
-                .and_then(Value::as_str)
-                .map(str::to_string);
-            match partial_writer::PartialWriter::open(arg_str("path"), expected) {
+            let expected = args.get("expectedBlobHash").and_then(Value::as_str).map(str::to_string);
+            match partial_writer::PartialWriter::open(arg_str(args, "path"), expected) {
                 Ok(w) => {
                     let bytes = w.bytes_written();
                     let digest = w.digest_hex();
                     let handle = next_partial_handle();
-                    partial_writers()
-                        .lock()
-                        .expect("partial writer registry poisoned")
-                        .insert(handle, w);
-                    json!({
-                        "handle": handle,
-                        "bytesWritten": bytes,
-                        "digest": digest,
-                    })
+                    partial_writers().lock().expect("partial writer registry poisoned").insert(handle, w);
+                    json!({ "handle": handle, "bytesWritten": bytes, "digest": digest })
                 }
                 Err(e) => json!({ "error": e.kind(), "message": e.message() }),
             }
         }
         "partial.append" => {
-            let handle = arg_i("handle") as u64;
-            let mut locked = partial_writers()
-                .lock()
-                .expect("partial writer registry poisoned");
+            let handle = arg_i(args, "handle") as u64;
+            let mut locked = partial_writers().lock().expect("partial writer registry poisoned");
             match locked.get_mut(&handle) {
-                Some(w) => match w.append(arg_str("text").as_bytes()) {
-                    Ok(()) => json!({
-                        "ok": true,
-                        "bytesWritten": w.bytes_written(),
-                        "digest": w.digest_hex(),
-                    }),
+                Some(w) => match w.append(arg_str(args, "text").as_bytes()) {
+                    Ok(()) => json!({ "ok": true, "bytesWritten": w.bytes_written(), "digest": w.digest_hex() }),
                     Err(e) => json!({ "error": e.kind(), "message": e.message() }),
                 },
-                None => json!({
-                    "error": "notFound",
-                    "message": format!("no partial writer for handle {handle}"),
-                }),
+                None => json!({ "error": "notFound", "message": format!("no partial writer for handle {handle}") }),
             }
         }
         "partial.restart" => {
-            let handle = arg_i("handle") as u64;
-            let mut locked = partial_writers()
-                .lock()
-                .expect("partial writer registry poisoned");
+            let handle = arg_i(args, "handle") as u64;
+            let mut locked = partial_writers().lock().expect("partial writer registry poisoned");
             match locked.get_mut(&handle) {
                 Some(w) => match w.restart() {
-                    Ok(()) => json!({
-                        "ok": true,
-                        "bytesWritten": w.bytes_written(),
-                        "digest": w.digest_hex(),
-                    }),
+                    Ok(()) => json!({ "ok": true, "bytesWritten": w.bytes_written(), "digest": w.digest_hex() }),
                     Err(e) => json!({ "error": e.kind(), "message": e.message() }),
                 },
-                None => json!({
-                    "error": "notFound",
-                    "message": format!("no partial writer for handle {handle}"),
-                }),
+                None => json!({ "error": "notFound", "message": format!("no partial writer for handle {handle}") }),
             }
         }
         "partial.setTotalExpected" => {
-            let handle = arg_i("handle") as u64;
-            let mut locked = partial_writers()
-                .lock()
-                .expect("partial writer registry poisoned");
+            let handle = arg_i(args, "handle") as u64;
+            let mut locked = partial_writers().lock().expect("partial writer registry poisoned");
             match locked.get_mut(&handle) {
-                Some(w) => {
-                    w.set_total_expected(arg_i("size"));
-                    json!({ "ok": true, "totalExpected": w.total_expected() })
-                }
-                None => json!({
-                    "error": "notFound",
-                    "message": format!("no partial writer for handle {handle}"),
-                }),
+                Some(w) => { w.set_total_expected(arg_i(args, "size")); json!({ "ok": true, "totalExpected": w.total_expected() }) }
+                None => json!({ "error": "notFound", "message": format!("no partial writer for handle {handle}") }),
             }
         }
         "partial.digest" => {
-            let handle = arg_i("handle") as u64;
-            let locked = partial_writers()
-                .lock()
-                .expect("partial writer registry poisoned");
+            let handle = arg_i(args, "handle") as u64;
+            let locked = partial_writers().lock().expect("partial writer registry poisoned");
             match locked.get(&handle) {
                 Some(w) => json!({ "digest": w.digest_hex() }),
-                None => json!({
-                    "error": "notFound",
-                    "message": format!("no partial writer for handle {handle}"),
-                }),
+                None => json!({ "error": "notFound", "message": format!("no partial writer for handle {handle}") }),
             }
         }
         "partial.close" => {
-            let handle = arg_i("handle") as u64;
-            partial_writers()
-                .lock()
-                .expect("partial writer registry poisoned")
-                .remove(&handle);
+            let handle = arg_i(args, "handle") as u64;
+            partial_writers().lock().expect("partial writer registry poisoned").remove(&handle);
             json!({ "ok": true })
         }
+        _ => json!({ "error": format!("unknown method: {method}") }),
+    }
+}
 
-        // ---- Fase 6: Server + syscalls leaves ----
-        "server.quote" => json!({ "quoted": server::shell_quote(arg_str("text")) }),
+fn dispatch_server(method: &str, args: &Value) -> Value {
+    match method {
+        "server.quote" => json!({ "quoted": server::shell_quote(arg_str(args, "text")) }),
         "server.displayCommand" => {
             let env = pairs_from_value(args.get("env").unwrap_or(&Value::Null));
             let spec = server::LaunchSpec {
-                executable_path: arg_str("executablePath").to_string(),
+                executable_path: arg_str(args, "executablePath").to_string(),
                 arguments: strings_from_value(args.get("arguments").unwrap_or(&Value::Null)),
-                extra_arg_count: args
-                    .get("extraArgCount")
-                    .and_then(Value::as_i64)
-                    .unwrap_or(0) as usize,
+                extra_arg_count: args.get("extraArgCount").and_then(Value::as_i64).unwrap_or(0) as usize,
                 env,
             };
             json!({ "command": spec.display_command() })
         }
         "server.hostArgument" => {
-            let build = args
-                .get("versionBuild")
-                .and_then(Value::as_i64)
-                .map(|b| LlamaVersion { build: b });
-            json!({
-                "host": server::host_argument(arg_str("bindAddress"), build)
-            })
+            let build = args.get("versionBuild").and_then(Value::as_i64).map(|b| LlamaVersion { build: b });
+            json!({ "host": server::host_argument(arg_str(args, "bindAddress"), build) })
         }
-        "server.isTailscaleAddress" => json!({
-            "isTailscale": server::is_tailscale_address(arg_str("address"))
-        }),
+        "server.isTailscaleAddress" => json!({ "isTailscale": server::is_tailscale_address(arg_str(args, "address")) }),
         "server.pickIpAddress" => {
             let addrs = interface_adresses(args);
-            json!({
-                "address": server::pick_ip_address(&addrs, args.get("primary").and_then(Value::as_str))
-            })
+            json!({ "address": server::pick_ip_address(&addrs, args.get("primary").and_then(Value::as_str)) })
         }
         "server.tailscaleAddress" => {
             let addrs = interface_adresses(args);
             json!({ "address": server::tailscale_address(&addrs) })
         }
         "server.effectiveBindAddress" => json!({
-            "address": server::effective_bind_address(
-                args.get("configured").and_then(Value::as_str),
-                &strings_from_value(args.get("localAddrs").unwrap_or(&Value::Null)),
-            )
+            "address": server::effective_bind_address(args.get("configured").and_then(Value::as_str), &strings_from_value(args.get("localAddrs").unwrap_or(&Value::Null)))
         }),
         "server.effectiveWebuiDirectory" => json!({
-            "directory": server::effective_webui_directory(
-                args.get("configured").and_then(Value::as_str),
-            )
+            "directory": server::effective_webui_directory(args.get("configured").and_then(Value::as_str))
         }),
-        "server.localHost" => json!({
-            "host": server::local_host(args.get("effectiveBind").and_then(Value::as_str))
-        }),
+        "server.localHost" => json!({ "host": server::local_host(args.get("effectiveBind").and_then(Value::as_str)) }),
         "server.resolvedHost" => {
             let addrs = interface_adresses(args);
-            json!({
-                "host": server::resolved_host(
-                    args.get("effectiveBind").and_then(Value::as_str),
-                    &addrs,
-                    args.get("primary").and_then(Value::as_str),
-                )
-            })
+            json!({ "host": server::resolved_host(args.get("effectiveBind").and_then(Value::as_str), &addrs, args.get("primary").and_then(Value::as_str)) })
         }
         "server.fitTargetMb" => json!({
-            "mb": server::fit_target_mb(
-                arg_i("gpuWorkingSetMb"),
-                arg_i("memoryMb"),
-                args.get("useFullWorkingSet").and_then(Value::as_bool).unwrap_or(false),
-            )
+            "mb": server::fit_target_mb(arg_i(args, "gpuWorkingSetMb"), arg_i(args, "memoryMb"), args.get("useFullWorkingSet").and_then(Value::as_bool).unwrap_or(false))
         }),
-        "server.presetRejectionOption" => json!({
-            "option": server::preset_rejection_option(arg_str("message"))
-        }),
-        "server.parseModelStatuses" => {
-            match server::parse_model_statuses(arg_str("body").as_bytes()) {
-                Some(statuses) => json!({
-                    "statuses": statuses
-                        .iter()
-                        .map(|(id, status)| json!([id, status]))
-                        .collect::<Vec<_>>(),
-                }),
-                None => json!({ "error": "malformed" }),
-            }
-        }
-        "server.extractPids" => json!({
-            "pids": server::extract_pids(arg_str("lsofOutput"))
-        }),
-        "server.isLlamaProcess" => json!({
-            "isLlama": server::is_llama_process(arg_str("comm"))
-        }),
-        "server.lastPathComponent" => json!({
-            "name": server::last_path_component(arg_str("path"))
-        }),
+        "server.presetRejectionOption" => json!({ "option": server::preset_rejection_option(arg_str(args, "message")) }),
+        "server.parseModelStatuses" => match server::parse_model_statuses(arg_str(args, "body").as_bytes()) {
+            Some(statuses) => json!({ "statuses": statuses.iter().map(|(id, status)| json!([id, status])).collect::<Vec<_>>() }),
+            None => json!({ "error": "malformed" }),
+        },
+        "server.extractPids" => json!({ "pids": server::extract_pids(arg_str(args, "lsofOutput")) }),
+        "server.isLlamaProcess" => json!({ "isLlama": server::is_llama_process(arg_str(args, "comm")) }),
+        "server.lastPathComponent" => json!({ "name": server::last_path_component(arg_str(args, "path")) }),
         "server.buildLaunchSpec" => {
             let addrs = interface_adresses(args);
             let extra_args = strings_from_value(args.get("extraArgs").unwrap_or(&Value::Null));
-            let version_build = args
-                .get("currentVersionBuild")
-                .and_then(Value::as_i64)
-                .map(|b| LlamaVersion { build: b });
+            let version_build = args.get("currentVersionBuild").and_then(Value::as_i64).map(|b| LlamaVersion { build: b });
             let input = server::LaunchSpecInput {
                 llama_path: args.get("llamaPath").and_then(Value::as_str),
-                presets_path: arg_str("presetsPath"),
-                log_file_path: arg_str("logFilePath"),
-                hf_cache_directory: arg_str("hfCacheDirectory"),
-                port: arg_i("port"),
-                fit_target_mb: arg_i("fitTargetMb"),
+                presets_path: arg_str(args, "presetsPath"),
+                log_file_path: arg_str(args, "logFilePath"),
+                hf_cache_directory: arg_str(args, "hfCacheDirectory"),
+                port: arg_i(args, "port"),
+                fit_target_mb: arg_i(args, "fitTargetMb"),
                 configured_bind_address: args.get("configuredBindAddress").and_then(Value::as_str),
                 address_by_interface: &addrs,
                 primary_interface: args.get("primaryInterface").and_then(Value::as_str),
                 current_version: version_build,
                 configured_webui_dir: args.get("configuredWebUiDirectory").and_then(Value::as_str),
                 sleep_idle_seconds: args.get("sleepIdleSeconds").and_then(Value::as_i64),
-                agent_mode: args
-                    .get("agentMode")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false),
+                agent_mode: args.get("agentMode").and_then(Value::as_bool).unwrap_or(false),
                 extra_args: &extra_args,
             };
             match server::build_launch_spec(&input) {
-                Some(spec) => json!({
-                    "spec": {
-                        "executablePath": spec.executable_path,
-                        "arguments": spec.arguments,
-                        "extraArgCount": spec.extra_arg_count,
-                        "env": spec.env
-                            .iter()
-                            .map(|(k, v)| json!([k, v]))
-                            .collect::<Vec<_>>(),
-                    }
-                }),
+                Some(spec) => json!({ "spec": { "executablePath": spec.executable_path, "arguments": spec.arguments, "extraArgCount": spec.extra_arg_count, "env": spec.env.iter().map(|(k, v)| json!([k, v])).collect::<Vec<_>>() } }),
                 None => json!({ "error": "noBinary" }),
             }
         }
+        _ => json!({ "error": format!("unknown method: {method}") }),
+    }
+}
 
-        // Smoke test for the event channel.
+fn dispatch_emit(method: &str, args: &Value) -> Value {
+    match method {
         "emit.test" => {
             let payload = args.get("payload").cloned().unwrap_or(Value::Null);
             emit(&json!({ "event": "test", "payload": payload }));
             json!({ "ok": true })
         }
+        _ => json!({ "error": format!("unknown method: {method}") }),
+    }
+}
 
-        // ---- Fase 7: config snapshot + event channel ----
-
-        // Returns a snapshot envelope `{schemaVersion, config}` whose `config`
-        // is the canonical `CoreConfig` the host last pushed (via
-        // `llama_core_init` / `llama_core_set_config`), always fully populated
-        // with the schema version stamped.
+fn dispatch_core(method: &str, _args: &Value) -> Value {
+    match method {
         "core.snapshot" => {
-            let cfg = core()
-                .lock()
-                .ok()
-                .map(|c| CoreConfig::from_value(&c.config))
-                .unwrap_or_default();
-            json!({
-                "schemaVersion": llama_core::config::CORE_CONFIG_SCHEMA_VERSION,
-                "config": cfg.to_value(),
-            })
+            let cfg = core().lock().ok().map(|c| CoreConfig::from_value(&c.config)).unwrap_or_default();
+            json!({ "schemaVersion": llama_core::config::CORE_CONFIG_SCHEMA_VERSION, "config": cfg.to_value() })
         }
+        _ => json!({ "error": format!("unknown method: {method}") }),
+    }
+}
 
-        // Emits a semantic event over the host callback. Unknown kinds are still
-        // forwarded (the host decides), but `known` reports whether the core
-        // recognizes it.
+fn dispatch_event(method: &str, args: &Value) -> Value {
+    match method {
         "event.emit" => {
-            let kind = arg_str("kind");
+            let kind = arg_str(args, "kind");
             let payload = args.get("payload").cloned().unwrap_or(Value::Null);
             emit(&llama_core::events::event_value(kind, payload));
             json!({ "ok": true, "known": llama_core::events::is_known_event(kind) })
         }
-
-        other => json!({ "error": format!("unknown method: {other}") }),
+        _ => json!({ "error": format!("unknown method: {method}") }),
     }
 }

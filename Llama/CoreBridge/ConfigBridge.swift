@@ -31,7 +31,7 @@ enum ConfigBridge {
       "hfCacheDirectory": UserSettings.hfCacheDirectory.path,
       "serverPort": UserSettings.serverPort ?? 0,
       "agentMode": UserSettings.agentMode,
-      "extraServerArgs": UserSettings.extraServerArgList,
+      "extraServerArgs": UserSettings.sanitizedExtraArgs,
       "gpuWorkingSetMb": Int(SystemMemory.gpuWorkingSetMb),
       "systemMemoryMb": Int(SystemMemory.memoryMb),
       "networkAvailable": currentNetworkAvailable(),

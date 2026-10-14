@@ -26,9 +26,67 @@ final class DeeplinkHandler {
 
     switch parsed {
     case .install(let repo, let quant):
-      // Deeplinks fire with the menu closed, so announce progress via a hint bubble.
-      install(repo: repo, quant: quant, announce: true)
+      // Deeplinks require explicit confirmation — a malicious webpage could spam
+      // them to fill the disk. In-app clicks (announce=false) skip this since
+      // the user already clicked inside the app.
+      Task {
+        await confirmAndInstall(repo: repo, quant: quant)
+      }
     }
+  }
+
+  /// Shows a confirmation dialog before starting a deeplink download. Resolves
+  /// the repo first to show the model name and size, so the user knows what
+  /// they're confirming.
+  private func confirmAndInstall(repo: String, quant: String?) async {
+    // Resolve first to get model info for the confirmation dialog.
+    let resolved: HFRepoResolver.Resolved
+    do {
+      resolved = try await HFRepoResolver.resolve(
+        repo: repo,
+        quant: quant,
+        token: UserSettings.hfToken
+      )
+    } catch {
+      logger.error(
+        "Deeplink resolve failed for \(repo, privacy: .public): \(error.localizedDescription, privacy: .public)"
+      )
+      if let err = error as? HFRepoResolver.ResolveError {
+        presentAlert(
+          title: err.errorDescription ?? "Couldn't install this model.",
+          body: err.recoverySuggestion)
+      } else {
+        presentAlert(title: "Couldn't install this model.", body: error.localizedDescription)
+      }
+      return
+    }
+
+    // Already installed? Skip confirmation.
+    let manager = ModelManager.shared
+    if let existing = manager.downloadedModels.first(where: {
+      $0.id == resolved.modelId || $0.downloadUrl == resolved.mainUrl
+    }) {
+      logger.info("Deeplink \(resolved.modelId, privacy: .public) is already installed")
+      postHint("\(existing.displayName) is already installed")
+      return
+    }
+
+    // Show confirmation dialog with model name and size.
+    let sizeStr = ByteCountFormatter.string(fromByteCount: resolved.approximateBytes, countStyle: .file)
+    let confirmed = await presentConfirmation(
+      title: "Download model?",
+      message: "\(resolved.modelId)\n\(sizeStr)",
+      confirmButton: "Download",
+      cancelButton: "Cancel"
+    )
+
+    guard confirmed else {
+      logger.info("User cancelled deeplink download for \(repo, privacy: .public)")
+      return
+    }
+
+    // User confirmed — proceed with download (reuse the same path as in-app clicks).
+    install(repo: repo, quant: quant, announce: true)
   }
 
   /// Resolves a repo+quant and starts the download, identically to a deeplink.
@@ -111,5 +169,31 @@ final class DeeplinkHandler {
     // activation mode.
     NSApp.activate(ignoringOtherApps: true)
     ModalPresentation.showAlert(style: .warning, title: title, body: body)
+  }
+
+  /// Shows a confirmation dialog and returns whether the user confirmed.
+  /// Uses NSAlert with a completion handler wrapped in a continuation for async/await.
+  private func presentConfirmation(
+    title: String, message: String, confirmButton: String, cancelButton: String
+  ) async -> Bool {
+    await withCheckedContinuation { continuation in
+      NSApp.activate(ignoringOtherApps: true)
+      let alert = NSAlert()
+      alert.messageText = title
+      alert.informativeText = message
+      alert.alertStyle = .informational
+      alert.addButton(withTitle: confirmButton)
+      alert.addButton(withTitle: cancelButton)
+
+      // Flip to .regular so the alert can take focus (accessory apps can't
+      // foreground modals without this).
+      let previousPolicy = NSApp.activationPolicy()
+      NSApp.setActivationPolicy(.regular)
+
+      let response = alert.runModal()
+      NSApp.setActivationPolicy(previousPolicy)
+
+      continuation.resume(returning: response == .alertFirstButtonReturn)
+    }
   }
 }

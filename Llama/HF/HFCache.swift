@@ -144,6 +144,8 @@ enum HFCache {
   /// following redirects to the CDN, which would lose these headers.
   ///
   /// Uses a single URLSession for all requests (sessions are heavyweight).
+  /// Requests run in parallel via TaskGroup -- a model with main + 3 shards +
+  /// mmproj + draft fires 6 HEAD requests concurrently instead of sequentially.
   static func fetchFileMetadata(
     for urls: [URL], token: String?
   ) async -> [URL: FileMetadata] {
@@ -151,29 +153,34 @@ enum HFCache {
     let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
     defer { session.finishTasksAndInvalidate() }
 
-    var results: [URL: FileMetadata] = [:]
+    return await withTaskGroup(of: (URL, FileMetadata?).self) { group in
+      for url in urls {
+        group.addTask {
+          var request = HFRequest.make(url, token: token)
+          request.httpMethod = "HEAD"
 
-    for url in urls {
-      var request = HFRequest.make(url, token: token)
-      request.httpMethod = "HEAD"
+          guard let (_, response) = try? await session.data(for: request),
+            let httpResponse = response as? HTTPURLResponse
+          else { return (url, nil) }
 
-      guard let (_, response) = try? await session.data(for: request),
-        let httpResponse = response as? HTTPURLResponse
-      else { continue }
+          let headers = httpResponse.allHeaderFields.map { ["\($0.key)", "\($0.value)"] }
+          let out = LlamaCore.callJSON("net.fileMetadata", [
+            "status": httpResponse.statusCode, "headers": headers,
+          ])
+          guard let meta = out?["metadata"] as? [String: Any] else { return (url, nil) }
+          let metadata = FileMetadata(
+            blobHash: meta["blobHash"] as? String,
+            commitHash: meta["commitHash"] as? String)
+          return (url, metadata)
+        }
+      }
 
-      // Harvest the hashes in the core so the HEAD parsing can't drift from the
-      // rest of the engine (the status gate and the X-Linked-Etag/ETag rules
-      // live in `net.fileMetadata`).
-      let headers = httpResponse.allHeaderFields.map { ["\($0.key)", "\($0.value)"] }
-      let out = LlamaCore.callJSON("net.fileMetadata", [
-        "status": httpResponse.statusCode, "headers": headers,
-      ])
-      guard let meta = out?["metadata"] as? [String: Any] else { continue }
-      results[url] = FileMetadata(
-        blobHash: meta["blobHash"] as? String, commitHash: meta["commitHash"] as? String)
+      var results: [URL: FileMetadata] = [:]
+      for await (url, metadata) in group {
+        if let metadata { results[url] = metadata }
+      }
+      return results
     }
-
-    return results
   }
 
   // MARK: - File Operations

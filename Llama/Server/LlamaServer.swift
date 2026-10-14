@@ -385,7 +385,7 @@ class LlamaServer {
       "fitTargetMb": Int(Model.fitTargetMb),
       "addresses": LocalNetwork.ipv4Addresses().map { [$0.key, $0.value] },
       "agentMode": UserSettings.agentMode,
-      "extraArgs": UserSettings.extraServerArgList,
+      "extraArgs": UserSettings.sanitizedExtraArgs,
     ]
     if let bind = UserSettings.networkBindAddress { args["configuredBindAddress"] = bind }
     if let primary = LocalNetwork.primaryInterfaceName() { args["primaryInterface"] = primary }

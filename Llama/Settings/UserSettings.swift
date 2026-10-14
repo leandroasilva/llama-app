@@ -400,12 +400,39 @@ enum UserSettings {
   /// no shell is involved in launching the server, so there's no quoting layer
   /// -- each token is passed verbatim as its own argv element. Takes effect on
   /// the next server start (no change notification for external defaults
-  /// writes). Security note: this must never become settable from a deeplink
-  /// or any other externally-triggerable path, or a webpage could inject
-  /// server arguments via the URL scheme.
+  /// writes).
+  ///
+  /// Security: this property has no setter -- it can only be populated via
+  /// `defaults write`, never from in-app code paths (deeplinks, API, etc.).
+  /// `sanitizedExtraArgs` further filters out flags that would conflict with
+  /// the app's own security controls (network binding, port, etc.).
   static var extraServerArgList: [String] {
     guard let raw = defaults.string(forKey: Keys.extraServerArgs) else { return [] }
     return raw.split(whereSeparator: \.isWhitespace).map(String.init)
+  }
+
+  /// Extra args with security-sensitive flags removed.
+  ///
+  /// Blocks flags the app manages itself (`--host`, `--port`, `--bind`) so a
+  /// `defaults write` can't silently override network exposure or port controls.
+  /// The app's own launch spec builds these from `UserSettings` and the network
+  /// guard; letting extra args override them would bypass the consent model.
+  static var sanitizedExtraArgs: [String] {
+    let blocked: Set<String> = ["--host", "--port", "--bind", "-H", "-p"]
+    var result: [String] = []
+    var skipNext = false
+    for arg in extraServerArgList {
+      if skipNext {
+        skipNext = false
+        continue
+      }
+      if blocked.contains(arg) {
+        skipNext = true
+        continue
+      }
+      result.append(arg)
+    }
+    return result
   }
 
   // MARK: - Context Tier Preferences
@@ -487,18 +514,30 @@ enum UserSettings {
   // MARK: - Hugging Face Token
 
   /// Optional token that authenticates downloads from Hugging Face.
-  /// Stored in UserDefaults (not Keychain) — fine given most users would use
-  /// a fine-grained token with minimal permissions.
+  /// Stored in the Keychain (not UserDefaults) so it isn't readable from a
+  /// plist on disk. On first launch after the migration, any token previously
+  /// stored in UserDefaults is moved to the Keychain and the old key cleared.
   static var hfToken: String? {
     get {
-      defaults.string(forKey: Keys.hfToken)
+      if let keychainToken = KeychainStore.get(forKey: Keys.hfToken) {
+        return keychainToken
+      }
+      if let legacyToken = defaults.string(forKey: Keys.hfToken),
+        isValidHFToken(legacyToken)
+      {
+        KeychainStore.set(legacyToken, forKey: Keys.hfToken)
+        defaults.removeObject(forKey: Keys.hfToken)
+        return legacyToken
+      }
+      return nil
     }
     set {
       if let newValue, !newValue.isEmpty, isValidHFToken(newValue) {
-        defaults.set(newValue, forKey: Keys.hfToken)
+        KeychainStore.set(newValue, forKey: Keys.hfToken)
       } else {
-        defaults.removeObject(forKey: Keys.hfToken)
+        KeychainStore.delete(forKey: Keys.hfToken)
       }
+      defaults.removeObject(forKey: Keys.hfToken)
     }
   }
 
