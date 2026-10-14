@@ -167,7 +167,20 @@ jobs:
             --team-id "$APPLE_TEAM_ID" \
             --wait
 
-          xcrun stapler staple "build/export/${{ env.PRODUCT_NAME }}.app"
+          for i in 1 2 3; do
+            echo "Stapling attempt $i..."
+            if xcrun stapler staple "build/export/${{ env.PRODUCT_NAME }}.app"; then
+              echo "Stapling succeeded"
+              break
+            fi
+            if [ $i -lt 3 ]; then
+              echo "Stapling failed, retrying in 10 seconds..."
+              sleep 10
+            else
+              echo "Stapling failed after 3 attempts"
+              exit 1
+            fi
+          done
 
       - name: Create DMG
         run: |
@@ -205,7 +218,20 @@ jobs:
             --team-id "$APPLE_TEAM_ID" \
             --wait
 
-          xcrun stapler staple "build/${{ env.PRODUCT_NAME }}.dmg"
+          for i in 1 2 3; do
+            echo "Stapling attempt $i..."
+            if xcrun stapler staple "build/${{ env.PRODUCT_NAME }}.dmg"; then
+              echo "Stapling succeeded"
+              break
+            fi
+            if [ $i -lt 3 ]; then
+              echo "Stapling failed, retrying in 10 seconds..."
+              sleep 10
+            else
+              echo "Stapling failed after 3 attempts"
+              exit 1
+            fi
+          done
 
       - name: Download Sparkle tools
         run: |
