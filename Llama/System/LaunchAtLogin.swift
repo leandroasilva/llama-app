@@ -17,6 +17,14 @@ enum LaunchAtLogin {
   /// -- so a persistently failing `register()` doesn't re-attempt on every
   /// launch. We'd rather a rare silent miss than nag the OS forever.
   static func enableOnFirstLaunch() {
+    // Debug builds (Xcode's DerivedData) share the user's login-items list but
+    // use a different bundle id (app.llama.Llama.dev). Opting in here would
+    // register the throwaway build to start at login, so a developer ends up
+    // with two Llama menu bar apps launching on every boot. Only the shipped
+    // app opts in by default; in Debug the toggle in Settings still works.
+    #if DEBUG
+      return
+    #endif
     guard !UserSettings.hasSetDefaultLaunchAtLogin else { return }
     UserSettings.hasSetDefaultLaunchAtLogin = true
     setEnabled(true)
