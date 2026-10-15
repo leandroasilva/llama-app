@@ -3,11 +3,10 @@ import XCTest
 
 @testable import Llama
 
-/// Fase 1 equivalence: the Swift originals and the shared `Fixtures/*.json`
-/// corpus must agree. Where the Swift API is pure and injectable the test
-/// asserts Swift == fixture directly; the cases that depend on live device
-/// memory or the `UserSettings` store (not injectable yet) are pinned on the
-/// Rust side by `cargo test` and spot-checked through the FFI here.
+/// Fase 1 equivalence: the shared `Fixtures/*.json` corpus and the running core
+/// must agree. Where a Swift API is pure and injectable the test asserts it
+/// directly; logic that now lives in the Rust core is pinned through the FFI
+/// here and asserted directly by `cargo test` on the other side.
 final class Phase1FixtureTests: XCTestCase {
 
   // MARK: - Fixture loading
@@ -80,19 +79,23 @@ final class Phase1FixtureTests: XCTestCase {
   func testSidecarPickerFixtures() throws {
     let f = try load("sidecar_picker.json", as: SidecarFixture.self)
     for c in f.isMmproj {
-      XCTAssertEqual(SidecarPicker.isMmproj(c.path), c.value, "isMmproj(\(c.path))")
+      let got: Bool = LlamaCore.callValue("sidecar.isMmproj", "value", ["path": c.path]) ?? false
+      XCTAssertEqual(got, c.value, "isMmproj(\(c.path))")
     }
     for c in f.isDraftHead {
-      XCTAssertEqual(SidecarPicker.isDraftHead(c.path), c.value, "isDraftHead(\(c.path))")
+      let got: Bool =
+        LlamaCore.callValue("sidecar.isDraftHead", "value", ["path": c.path]) ?? false
+      XCTAssertEqual(got, c.value, "isDraftHead(\(c.path))")
     }
     for c in f.mmproj {
-      XCTAssertEqual(
-        SidecarPicker.mmproj(among: c.names, mainPath: c.mainPath), c.expected, "mmproj")
+      let out = LlamaCore.callJSON("sidecar.mmproj", ["names": c.names, "mainPath": c.mainPath])
+      XCTAssertEqual(out?["path"] as? String, c.expected, "mmproj")
     }
     for c in f.draftHead {
-      XCTAssertEqual(
-        SidecarPicker.draftHead(among: c.names, mainPath: c.mainPath, tag: c.tag), c.expected,
-        "draftHead")
+      var args: [String: Any] = ["names": c.names, "mainPath": c.mainPath]
+      if let tag = c.tag { args["tag"] = tag }
+      let out = LlamaCore.callJSON("sidecar.draftHead", args)
+      XCTAssertEqual(out?["path"] as? String, c.expected, "draftHead")
     }
   }
 

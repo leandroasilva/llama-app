@@ -4,7 +4,7 @@ import XCTest
 @testable import Llama
 
 /// Reads the same `Fixtures/*.json` corpus as the Rust `cargo test` suites, so
-/// the Swift original and the Rust port are pinned to identical expectations.
+/// the Swift surface and the Rust core are pinned to identical expectations.
 /// If either side drifts from the corpus, one of the two test runs fails.
 final class FixtureEquivalenceTests: XCTestCase {
 
@@ -69,35 +69,33 @@ final class FixtureEquivalenceTests: XCTestCase {
     let f = try load("hf_repo_parser.json", as: RepoFixture.self)
 
     for c in f.parse {
-      let got = HFRepoParser.parse(repoDir: c.input)
+      let out = LlamaCore.callJSON("repo.parse", ["repoDir": c.input])
       if let org = c.org, let repo = c.repo {
-        XCTAssertEqual(got?.org, org, "parse(\(c.input.debugDescription)) org")
-        XCTAssertEqual(got?.repo, repo, "parse(\(c.input.debugDescription)) repo")
+        XCTAssertEqual(out?["org"] as? String, org, "parse(\(c.input.debugDescription)) org")
+        XCTAssertEqual(out?["repo"] as? String, repo, "parse(\(c.input.debugDescription)) repo")
       } else {
-        XCTAssertNil(got, "parse(\(c.input.debugDescription)) expected nil")
+        XCTAssertNil(out, "parse(\(c.input.debugDescription)) expected nil")
       }
     }
     for c in f.parse_quant {
-      XCTAssertEqual(
-        HFRepoParser.parseQuant(filename: c.input), c.expect,
-        "parseQuant(\(c.input.debugDescription))")
+      let got: String? = LlamaCore.callScalar("repo.parseQuant", ["filename": c.input])
+      XCTAssertEqual(got, c.expect, "parseQuant(\(c.input.debugDescription))")
     }
     for c in f.is_split_shard {
-      XCTAssertEqual(
-        HFRepoParser.isSplitShard(c.input), c.expect, "isSplitShard(\(c.input.debugDescription))")
+      let got: Bool? = LlamaCore.callScalar("repo.isSplitShard", ["filename": c.input])
+      XCTAssertEqual(got, c.expect, "isSplitShard(\(c.input.debugDescription))")
     }
     for c in f.is_first_shard {
-      XCTAssertEqual(
-        HFRepoParser.isFirstShard(c.input), c.expect, "isFirstShard(\(c.input.debugDescription))")
+      let got: Bool? = LlamaCore.callScalar("repo.isFirstShard", ["filename": c.input])
+      XCTAssertEqual(got, c.expect, "isFirstShard(\(c.input.debugDescription))")
     }
     for c in f.shard_total {
-      XCTAssertEqual(
-        HFRepoParser.shardTotal(c.input), c.expect, "shardTotal(\(c.input.debugDescription))")
+      let got: Int? = LlamaCore.callScalar("repo.shardTotal", ["filename": c.input])
+      XCTAssertEqual(got, c.expect, "shardTotal(\(c.input.debugDescription))")
     }
     for c in f.split_shard_base_name {
-      XCTAssertEqual(
-        HFRepoParser.splitShardBaseName(c.input), c.expect,
-        "splitShardBaseName(\(c.input.debugDescription))")
+      let got: String? = LlamaCore.callScalar("repo.splitShardBaseName", ["filename": c.input])
+      XCTAssertEqual(got, c.expect, "splitShardBaseName(\(c.input.debugDescription))")
     }
   }
 }
