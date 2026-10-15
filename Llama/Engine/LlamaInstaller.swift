@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 import os.log
@@ -176,19 +177,55 @@ enum LlamaInstaller {
 
   // MARK: - Helpers
 
-  /// Downloads a URL to a temp file, following HF's redirect to the CDN. Kept in
-  /// Swift for `URLSession`'s async download (the core has no async transport).
+  /// Downloads a URL to a temp file, following HF's redirect to the CDN, and
+  /// verifies the bytes against the SHA256 Hugging Face advertises for the blob
+  /// (the resolve URL's `X-Linked-Etag`, read through the same `net.blobHash`
+  /// rule the cache uses). A mismatch aborts the install — the artifact is
+  /// decompressed and then executed, so a corrupted or substituted download must
+  /// never be promoted. When HF advertises no hash (e.g. a non-LFS file) the
+  /// download is accepted unverified, since there is nothing to check against.
+  ///
+  /// Kept in Swift for `URLSession`'s async download (the core has no async
+  /// transport).
   private static func download(_ urlString: String) async throws -> URL {
     guard let url = URL(string: urlString) else {
       throw InstallError.downloadFailed("bad URL: \(urlString)")
     }
-    let request = HFRequest.make(url, token: UserSettings.hfToken)
+    let token = UserSettings.hfToken
+    let expected =
+      await HFCache.fetchFileMetadata(for: [url], token: token)[url]?.blobHash
+
+    let request = HFRequest.make(url, token: token)
     let (tempURL, response) = try await URLSession.shared.download(for: request)
     guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
       let code = (response as? HTTPURLResponse)?.statusCode ?? -1
       throw InstallError.downloadFailed("\(urlString) (HTTP \(code))")
     }
+
+    if let expected {
+      let computed = try sha256(of: tempURL)
+      guard digestMatches(computed: computed, expected: expected) else {
+        try? FileManager.default.removeItem(at: tempURL)
+        throw InstallError.downloadFailed(
+          "\(url.lastPathComponent) failed its integrity check (SHA256 mismatch)")
+      }
+    }
     return tempURL
+  }
+
+  /// Whether a downloaded file's digest is the one HF advertised. A nil
+  /// `expected` means HF advertised no hash, so there is nothing to check.
+  static func digestMatches(computed: String, expected: String?) -> Bool {
+    guard let expected else { return true }
+    return computed == expected.lowercased()
+  }
+
+  /// Streams `fileURL` through SHA256 and returns lowercase hex, matching the
+  /// form HF names blobs by. Runs off the main actor via the caller.
+  private static func sha256(of fileURL: URL) throws -> String {
+    var hasher = SHA256()
+    try HFCache.feedHasher(&hasher, from: fileURL)
+    return HFCache.hex(hasher.finalize())
   }
 
   /// Copies `src` (possibly on another volume) onto the destination volume, then

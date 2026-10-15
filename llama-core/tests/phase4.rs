@@ -315,6 +315,17 @@ fn read_version_parses_real_formats() {
 struct StubClient {
     status: u16,
     body: Vec<u8>,
+    headers: Vec<(String, String)>,
+}
+
+impl StubClient {
+    fn new(status: u16, body: Vec<u8>) -> Self {
+        Self {
+            status,
+            body,
+            headers: Vec::new(),
+        }
+    }
 }
 
 impl HttpClient for StubClient {
@@ -324,7 +335,7 @@ impl HttpClient for StubClient {
     fn get_json(&self, _url: &str, _token: Option<&str>) -> Result<HttpResponse, NetError> {
         Ok(HttpResponse {
             status: self.status,
-            headers: Default::default(),
+            headers: self.headers.clone(),
             body: self.body.clone(),
         })
     }
@@ -332,19 +343,13 @@ impl HttpClient for StubClient {
 
 #[test]
 fn download_statuses() {
-    let ok = StubClient {
-        status: 200,
-        body: b"artifact-bytes".to_vec(),
-    };
+    let ok = StubClient::new(200, b"artifact-bytes".to_vec());
     assert_eq!(
         download(&ok, "https://example.com/llama-app.zst", None).unwrap(),
         b"artifact-bytes"
     );
 
-    let redirect = StubClient {
-        status: 302,
-        body: vec![],
-    };
+    let redirect = StubClient::new(302, vec![]);
     match download(&redirect, "https://example.com/resolve", Some("tok")) {
         Err(InstallError::DownloadFailed(m)) => {
             assert!(m.contains("301") || m.contains("302"), "{m}");
@@ -352,14 +357,45 @@ fn download_statuses() {
         other => panic!("expected DownloadFailed, got {other:?}"),
     }
 
-    let gone = StubClient {
-        status: 404,
-        body: vec![],
-    };
+    let gone = StubClient::new(404, vec![]);
     assert!(matches!(
         download(&gone, "https://example.com/resolve", None),
         Err(InstallError::DownloadFailed(_))
     ));
+}
+
+#[test]
+fn download_verifies_advertised_sha256() {
+    // `b"artifact-bytes"` hashed with SHA256.
+    let body = b"artifact-bytes".to_vec();
+    let good = llama_core::engine::partial_writer::sha256_hex(&body);
+
+    let matching = StubClient {
+        status: 200,
+        body: body.clone(),
+        headers: vec![("X-Linked-Etag".into(), format!("\"{good}\""))],
+    };
+    assert_eq!(
+        download(&matching, "https://example.com/llama-app.zst", None).unwrap(),
+        body
+    );
+
+    let mismatch = StubClient {
+        status: 200,
+        body,
+        headers: vec![("X-Linked-Etag".into(), format!("\"{}\"", "0".repeat(64)))],
+    };
+    match download(&mismatch, "https://example.com/llama-app.zst", None) {
+        Err(InstallError::DownloadFailed(m)) => assert!(m.contains("integrity"), "{m}"),
+        other => panic!("expected integrity failure, got {other:?}"),
+    }
+
+    // No advertised hash: nothing to check against, the bytes pass through.
+    let unadvertised = StubClient::new(200, b"anything".to_vec());
+    assert_eq!(
+        download(&unadvertised, "https://example.com/unzstd", None).unwrap(),
+        b"anything"
+    );
 }
 
 #[test]

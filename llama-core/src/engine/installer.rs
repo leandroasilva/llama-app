@@ -7,7 +7,9 @@
 //! is never touched (see `super::binaries`).
 
 use super::binaries::{is_executable_file, read_version};
+use super::partial_writer::sha256_hex;
 use super::version::LlamaVersion;
+use crate::net::response::blob_hash;
 
 /// Root of the prebuilt-binary bucket. `…/resolve/latest` returns the current
 /// version tag (e.g. `b9553`); `…/resolve/<ver>/<arch>/<os>/…` are artifacts.
@@ -78,6 +80,11 @@ pub fn unzstd_url(version: &str) -> String {
 /// Downloads `url` to bytes, gating on a 2xx status. Mirrors
 /// `LlamaInstaller.download` minus the temp file (the caller writes it where it
 /// wants it). Headers (User-Agent / token-on-HF) come from the `HttpClient`.
+///
+/// Integrity: when Hugging Face advertises the blob's SHA256 (`X-Linked-Etag`,
+/// read via the shared [`blob_hash`] rule), the downloaded bytes must match it.
+/// A mismatch aborts the install — the artifact is decompressed and then run, so
+/// a corrupted or substituted download must never reach the user.
 pub fn download(
     client: &dyn crate::net::client::HttpClient,
     url: &str,
@@ -91,6 +98,14 @@ pub fn download(
             "{url} (HTTP {})",
             resp.status
         )));
+    }
+    if let Some(expected) = blob_hash(&resp) {
+        let computed = sha256_hex(&resp.body);
+        if !super::download::expected_hash_matches(&computed, &expected) {
+            return Err(InstallError::DownloadFailed(format!(
+                "{url} failed its integrity check (SHA256 mismatch)"
+            )));
+        }
     }
     Ok(resp.body)
 }
