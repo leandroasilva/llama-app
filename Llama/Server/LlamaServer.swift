@@ -457,10 +457,13 @@ class LlamaServer {
   /// caller can surface the conflict as a clear error instead of letting the
   /// bind fail opaquely; `nil` means the port is now ours to bind.
   nonisolated static func reclaimPort() -> String? {
-    // `lsof -ti` prints just the PIDs listening on the TCP port.
+    // `lsof -ti` prints just the PIDs listening on the TCP port. `-n`/`-P` skip
+    // reverse-DNS and service-name lookups -- without them `lsof` can stall for
+    // seconds resolving the port/host, which is exactly the pre-flight latency
+    // this runs off the main actor to avoid.
     let lsof = Process()
     lsof.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
-    lsof.arguments = ["-ti", "tcp:\(port)", "-sTCP:LISTEN"]
+    lsof.arguments = ["-nP", "-ti", "tcp:\(port)", "-sTCP:LISTEN"]
     let pipe = Pipe()
     lsof.standardOutput = pipe
     lsof.standardError = FileHandle.nullDevice
