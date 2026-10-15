@@ -76,12 +76,22 @@ struct LlamaServerAPI {
     return URLSession(configuration: config)
   }()
 
+  /// Authorization header for a server that was started with an API key. Empty
+  /// on a loopback server (no key), so those requests go out header-free.
+  private var authHeaders: [String: String] {
+    guard let key = LlamaServer.requestAPIKey else { return [:] }
+    return ["Authorization": "Bearer \(key)"]
+  }
+
   /// Sends a GET request and returns the response data.
   private func get(endpoint: String, timeout: TimeInterval = 2.0) async -> Data? {
     guard let url = URL(string: "\(baseUrl)/\(endpoint)") else { return nil }
 
     var request = URLRequest(url: url)
     request.timeoutInterval = timeout
+    for (field, value) in authHeaders {
+      request.setValue(value, forHTTPHeaderField: field)
+    }
 
     do {
       let (data, response) = try await Self.session.data(for: request)
@@ -102,6 +112,9 @@ struct LlamaServerAPI {
     var request = URLRequest(url: url)
     request.httpMethod = "POST"
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    for (field, value) in authHeaders {
+      request.setValue(value, forHTTPHeaderField: field)
+    }
     request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
     do {

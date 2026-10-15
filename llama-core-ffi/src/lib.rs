@@ -1442,6 +1442,7 @@ fn dispatch_server(method: &str, args: &Value) -> Value {
                     .get("agentMode")
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
+                api_key: args.get("apiKey").and_then(Value::as_str),
                 extra_args: &extra_args,
             };
             match server::build_launch_spec(&input) {

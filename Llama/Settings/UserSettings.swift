@@ -42,6 +42,7 @@ enum UserSettings {
     static let exposeToNetwork = "exposeToNetwork"
     static let exposeToNetworkFingerprint = "exposeToNetworkFingerprint"
     static let serverPort = "serverPort"
+    static let serverAPIKey = "serverAPIKey"
     static let sleepIdleTime = "sleepIdleTime"
     static let selectedCtxTiers = "selectedCtxTiers"
     static let extraServerArgs = "extraServerArgs"
@@ -234,6 +235,9 @@ enum UserSettings {
       // Remember which network this was agreed to on, so joining a different
       // one can withdraw it (see `NetworkIdentity`).
       exposeToNetworkFingerprint = NetworkIdentity.currentFingerprint()
+      // Granting network access is when the server starts needing a key;
+      // generate it now so the Settings row can offer it to copy.
+      _ = ensureServerAPIKey()
 
     case .tailscale:
       // Only reachable from a UI that found an address to offer; if Tailscale
@@ -243,6 +247,7 @@ enum UserSettings {
       // A Tailscale bind isn't tied to a place, so there's no network to scope
       // it to -- see `NetworkExposureGuard`.
       exposeToNetworkFingerprint = nil
+      _ = ensureServerAPIKey()
 
     case .custom:
       return
@@ -265,6 +270,50 @@ enum UserSettings {
         defaults.removeObject(forKey: Keys.exposeToNetworkFingerprint)
       }
     }
+  }
+
+  /// The API key `llama serve` requires when it's reachable beyond loopback,
+  /// or `nil` if one has never been generated. Loopback servers don't use it.
+  ///
+  /// Generated and stored only when network access is turned on (see
+  /// `ensureServerAPIKey`), so a loopback-only install never grows one. It's
+  /// handed to the server via `LLAMA_API_KEY` (not `--api-key`) so it stays out
+  /// of the process list and the rendered command, and passed back to the
+  /// server on every request the app makes. The built-in web UI, which the app
+  /// opens in the browser, asks for it once and remembers it.
+  static var serverAPIKey: String? {
+    get {
+      let value = defaults.string(forKey: Keys.serverAPIKey)
+      return (value?.isEmpty == false) ? value : nil
+    }
+    set {
+      if let newValue, !newValue.isEmpty {
+        defaults.set(newValue, forKey: Keys.serverAPIKey)
+      } else {
+        defaults.removeObject(forKey: Keys.serverAPIKey)
+      }
+    }
+  }
+
+  /// Returns the stored API key, generating and persisting one on first use.
+  /// Idempotent, so the settings preview and the launch-spec builder can both
+  /// call it without churning the value (or restarting the server).
+  static func ensureServerAPIKey() -> String {
+    if let existing = serverAPIKey { return existing }
+    let key = generateAPIKey()
+    serverAPIKey = key
+    return key
+  }
+
+  /// 256 bits of randomness, base64url-encoded -- the shape llama.cpp expects
+  /// for `--api-key`, and short enough to paste into the web UI.
+  private static func generateAPIKey() -> String {
+    var rng = SystemRandomNumberGenerator()
+    let bytes = (0..<32).map { _ in UInt8.random(in: .min ... .max, using: &rng) }
+    return Data(bytes).base64EncodedString()
+      .replacingOccurrences(of: "+", with: "-")
+      .replacingOccurrences(of: "/", with: "_")
+      .replacingOccurrences(of: "=", with: "")
   }
 
   /// Valid range for a user-set server port. The lower bound is 1024 because

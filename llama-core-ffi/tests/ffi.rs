@@ -1327,6 +1327,7 @@ fn fase6_server() {
         "configuredWebUiDirectory": tmp,
         "sleepIdleSeconds": null,
         "agentMode": true,
+        "apiKey": "ffi-key",
         "extraArgs": ["--ctx-size", "8192"],
     }));
     assert_eq!(spec["spec"]["executablePath"], format!("{tmp}/bin/llama"));
@@ -1341,6 +1342,9 @@ fn fase6_server() {
     assert_eq!(args.last().unwrap(), "8192");
     assert_eq!(spec["spec"]["extraArgCount"], 2);
     assert_eq!(spec["spec"]["env"][1][0], "HF_HUB_CACHE");
+    // Exposed bind => the key is delivered via the environment, not a flag.
+    assert_eq!(spec["spec"]["env"][3][0], "LLAMA_API_KEY");
+    assert_eq!(spec["spec"]["env"][3][1], "ffi-key");
 
     // stale bind falls back to loopback => explicit --host 127.0.0.1.
     let spec = build(serde_json::json!({

@@ -465,6 +465,8 @@ struct SettingsView: View {
   @State private var serverPort = LlamaServer.port
   @State private var showingServerPortSheet = false
   @State private var networkAccess = UserSettings.networkAccess
+  // Feedback for the API key copy button in the Network tab.
+  @State private var apiKeyCopied = false
   // The code's modules follow the appearance, so the row has to redraw on a
   // theme change.
   @Environment(\.colorScheme) private var colorScheme
@@ -581,8 +583,46 @@ struct SettingsView: View {
         }
       }
 
+      // API key section -- only while the server is exposed. On loopback it
+      // has no key and needs none, so the row would only raise a question.
+      if networkAccess != .off {
+        Section {
+          apiKeyRow
+        }
+      }
+
     }
     .formStyle(.grouped)
+  }
+
+  /// The API key the server requires from clients that reach it over the
+  /// network, with a copy button. Loopback callers (this app, `curl` on this
+  /// Mac) never need it; remote clients and the built-in web UI's first visit
+  /// do. Copying once is enough for the web UI, which remembers it.
+  private var apiKeyRow: some View {
+    let key = UserSettings.ensureServerAPIKey()
+    return SettingRow(
+      title: "API key",
+      description:
+        "Required by clients that reach the server over the network, including the "
+        + "web UI's first visit. Copy it once; the browser remembers it."
+    ) {
+      HStack(spacing: 6) {
+        Text(truncatedToken(key))
+          .font(.system(size: 11, design: .monospaced))
+          .foregroundStyle(.secondary)
+          .textSelection(.enabled)
+
+        Button(apiKeyCopied ? "Copied" : "Copy") {
+          NSPasteboard.general.clearContents()
+          NSPasteboard.general.setString(key, forType: .string)
+          apiKeyCopied = true
+          DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { apiKeyCopied = false }
+        }
+        .font(.callout)
+        .controlSize(.small)
+      }
+    }
   }
 
   /// The URL another device would use to reach the server, or nil when the

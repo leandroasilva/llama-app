@@ -258,6 +258,7 @@
       "configuredWebUiDirectory": "<TMP>/webui",
       "sleepIdleSeconds": 300,
       "agentMode": false,
+      "apiKey": "fixture-key",
       "extraArgs": [],
       "spec": {
         "executablePath": "<TMP>/bin/llama",
@@ -305,6 +306,7 @@
       "configuredWebUiDirectory": "<TMP>/webui",
       "sleepIdleSeconds": null,
       "agentMode": true,
+      "apiKey": "fixture-key",
       "extraArgs": ["--ctx-size", "8192"],
       "spec": {
         "executablePath": "<TMP>/bin/llama",
@@ -334,7 +336,8 @@
         "env": [
           ["GGML_METAL_NO_RESIDENCY", "1"],
           ["HF_HUB_CACHE", "<TMP>/hf-cache"],
-          ["LLAMA_CACHE", "/tmp/llama-empty-cache"]
+          ["LLAMA_CACHE", "/tmp/llama-empty-cache"],
+          ["LLAMA_API_KEY", "fixture-key"]
         ]
       }
     },

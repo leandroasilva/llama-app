@@ -341,6 +341,7 @@ fn build_launch_spec_fixture() {
             "hfCacheDirectory",
             "configuredBindAddress",
             "configuredWebUiDirectory",
+            "apiKey",
         ]
         .iter()
         .filter_map(|k| {
@@ -369,6 +370,7 @@ fn build_launch_spec_fixture() {
             configured_webui_dir: get("configuredWebUiDirectory"),
             sleep_idle_seconds: c["sleepIdleSeconds"].as_i64(),
             agent_mode: c["agentMode"].as_bool().unwrap(),
+            api_key: get("apiKey"),
             extra_args: &extra_args,
         };
 

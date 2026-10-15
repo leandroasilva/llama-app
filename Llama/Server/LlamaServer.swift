@@ -40,6 +40,18 @@ class LlamaServer {
   /// The effective port: the user's override if set, else the default.
   nonisolated static var port: Int { UserSettings.serverPort ?? defaultPort }
 
+  /// The API key the app must present on requests to its own server, or `nil`
+  /// when there is nothing to present.
+  ///
+  /// The server only carries a key while it's reachable beyond loopback (see
+  /// `buildLaunchSpec`); on loopback it starts without one and would ignore the
+  /// header anyway. Returns the stored key without generating one, so a request
+  /// never creates a key the server wasn't started with.
+  nonisolated static var requestAPIKey: String? {
+    guard UserSettings.networkBindAddress != nil else { return nil }
+    return UserSettings.serverAPIKey
+  }
+
   /// Whether `port` is free to bind on localhost right now. Used to validate a
   /// user-chosen port before saving it, so a conflict is caught at the point of
   /// the action rather than as an opaque server failure later. (Best-effort:
@@ -388,6 +400,14 @@ class LlamaServer {
       "extraArgs": UserSettings.sanitizedExtraArgs,
     ]
     if let bind = UserSettings.networkBindAddress { args["configuredBindAddress"] = bind }
+    // Provide a key whenever the server may be reachable off-loopback (the Rust
+    // core decides from the *effective* bind whether to actually pass it), so a
+    // stale address that falls back to loopback stays keyless. Generated on
+    // first exposure and reused after, so the browser web UI only asks for it
+    // once.
+    if UserSettings.networkBindAddress != nil {
+      args["apiKey"] = UserSettings.ensureServerAPIKey()
+    }
     if let primary = LocalNetwork.primaryInterfaceName() { args["primaryInterface"] = primary }
     if let build = LlamaInstallManager.shared.currentVersion?.build {
       args["currentVersionBuild"] = build

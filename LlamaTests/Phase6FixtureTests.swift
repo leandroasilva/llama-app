@@ -230,7 +230,7 @@ final class Phase6FixtureTests: XCTestCase {
     let tmp = tempDir.path
     let caseKeys = [
       "llamaPath", "presetsPath", "logFilePath", "hfCacheDirectory",
-      "configuredBindAddress", "configuredWebUiDirectory",
+      "configuredBindAddress", "configuredWebUiDirectory", "apiKey",
     ]
 
     for raw in try XCTUnwrap(f["buildLaunchSpecCases"] as? [[String: Any]]) {

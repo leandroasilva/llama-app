@@ -186,6 +186,13 @@ pub fn effective_webui_directory(configured: Option<&str>) -> Option<String> {
     })
 }
 
+/// Whether an effective bind address reaches only this Mac. Loopback needs no
+/// API key -- there is no network peer to authenticate -- but a bind that
+/// includes a LAN/Tailscale address does.
+pub fn is_loopback_bind(bind_address: &str) -> bool {
+    matches!(bind_address, "127.0.0.1" | "::1" | "localhost")
+}
+
 /// `LlamaServer.localHost`: where the app itself reaches the server. A specific
 /// address is bound either way, so it wins; `0.0.0.0` includes loopback.
 pub fn local_host(effective_bind: Option<&str>) -> String {
@@ -251,6 +258,10 @@ pub struct LaunchSpecInput<'a> {
     pub configured_webui_dir: Option<&'a str>,
     pub sleep_idle_seconds: Option<i64>,
     pub agent_mode: bool,
+    /// The per-installation API key to hand `llama serve` when the server is
+    /// reachable beyond loopback. `None` (or empty) leaves the server open --
+    /// which is fine on loopback, where there is no network peer.
+    pub api_key: Option<&'a str>,
     pub extra_args: &'a [String],
 }
 
@@ -258,18 +269,6 @@ pub struct LaunchSpecInput<'a> {
 /// is installed.
 pub fn build_launch_spec(input: &LaunchSpecInput<'_>) -> Option<LaunchSpec> {
     let llama_path = input.llama_path?;
-
-    let env = vec![
-        ("GGML_METAL_NO_RESIDENCY".to_string(), "1".to_string()),
-        (
-            "HF_HUB_CACHE".to_string(),
-            input.hf_cache_directory.to_string(),
-        ),
-        (
-            "LLAMA_CACHE".to_string(),
-            "/tmp/llama-empty-cache".to_string(),
-        ),
-    ];
 
     let mut arguments = vec![
         "serve".to_string(),
@@ -309,6 +308,32 @@ pub fn build_launch_spec(input: &LaunchSpecInput<'_>) -> Option<LaunchSpec> {
         "--host".to_string(),
         host_argument(&bind, input.current_version),
     ]);
+
+    let mut env = vec![
+        ("GGML_METAL_NO_RESIDENCY".to_string(), "1".to_string()),
+        (
+            "HF_HUB_CACHE".to_string(),
+            input.hf_cache_directory.to_string(),
+        ),
+        (
+            "LLAMA_CACHE".to_string(),
+            "/tmp/llama-empty-cache".to_string(),
+        ),
+    ];
+
+    // Require the API key whenever the server is reachable beyond loopback.
+    // `llama serve` has no authentication of its own, so on a LAN or tailnet
+    // anyone who can reach the port can load models and spend the machine's
+    // cycles. On loopback there is no network peer to authenticate, and an
+    // always-on key would only make the built-in web UI ask for it on first
+    // load, so the key is scoped to the exposed case. Passed through the env
+    // (`LLAMA_API_KEY`) rather than `--api-key` so it never lands in the
+    // process list or the app's rendered command.
+    if !is_loopback_bind(&bind) {
+        if let Some(key) = input.api_key.filter(|k| !k.is_empty()) {
+            env.push(("LLAMA_API_KEY".to_string(), key.to_string()));
+        }
+    }
 
     if let Some(seconds) = input.sleep_idle_seconds {
         arguments.extend(["--sleep-idle-seconds".to_string(), seconds.to_string()]);
@@ -590,6 +615,7 @@ mod tests {
             configured_webui_dir: Some(dir.to_str().unwrap()),
             sleep_idle_seconds: Some(300),
             agent_mode: true,
+            api_key: Some("secret-key"),
             extra_args: &["--ctx-size".to_string(), "8192".to_string()],
         })
         .unwrap();
@@ -633,6 +659,58 @@ mod tests {
                 "/tmp/llama-empty-cache".to_string()
             )
         );
+        // Exposed bind => the API key rides along in the environment (never as
+        // a flag, so it stays out of `ps` and the rendered command).
+        assert_eq!(
+            spec.env[3],
+            ("LLAMA_API_KEY".to_string(), "secret-key".to_string())
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn api_key_only_reaches_a_network_bind() {
+        let dir = std::env::temp_dir().join("llama-server-api-key-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let spec_for = |bind: Option<&str>, addrs: &[(String, String)]| {
+            build_launch_spec(&LaunchSpecInput {
+                llama_path: Some("/Users/x/llama"),
+                presets_path: "/tmp/models.ini",
+                log_file_path: "/tmp/llama-server.log",
+                hf_cache_directory: "/tmp/hf-cache",
+                port: 9931,
+                fit_target_mb: 1024,
+                configured_bind_address: bind,
+                address_by_interface: addrs,
+                primary_interface: None,
+                current_version: Some(LlamaVersion { build: 11_200 }),
+                configured_webui_dir: None,
+                sleep_idle_seconds: None,
+                agent_mode: false,
+                api_key: Some("secret-key"),
+                extra_args: &[],
+            })
+            .unwrap()
+        };
+        let has_key = |spec: &LaunchSpec| spec.env.iter().any(|(k, _)| k == "LLAMA_API_KEY");
+
+        // Loopback (no configured bind) needs no key: there's no network peer.
+        assert!(!has_key(&spec_for(None, &[])));
+        assert!(!has_key(&spec_for(Some("127.0.0.1"), &[])));
+        // A stale configured address falls back to loopback, so no key either.
+        assert!(!has_key(&spec_for(
+            Some("100.64.0.1"),
+            &[("en0".to_string(), "192.168.1.5".to_string())]
+        )));
+        // A held network address (Tailscale or 0.0.0.0) gets the key.
+        assert!(has_key(&spec_for(
+            Some("100.64.0.1"),
+            &[("utun4".to_string(), "100.64.0.1".to_string())]
+        )));
+        assert!(has_key(&spec_for(Some("0.0.0.0"), &[])));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
