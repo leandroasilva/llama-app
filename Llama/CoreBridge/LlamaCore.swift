@@ -60,7 +60,10 @@ enum LlamaCore {
   static func partialAppend(handle: UInt64, data: Data) -> Int32 {
     data.withUnsafeBytes { raw -> Int32 in
       let buffer = raw.bindMemory(to: UInt8.self)
-      return llama_core_partial_append(handle, buffer.baseAddress, buffer.count)
+      // `numericCast`: the C `size_t` `len` imports as `Int` under some
+      // toolchains and `UInt` under others, so match whichever the active SDK
+      // picked instead of hardcoding one.
+      return llama_core_partial_append(handle, buffer.baseAddress, numericCast(buffer.count))
     }
   }
 
