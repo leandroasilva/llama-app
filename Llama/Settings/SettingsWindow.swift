@@ -1029,7 +1029,12 @@ struct SettingsView: View {
     _ option: UserSettings.NetworkAccess, title: String
   ) -> some View {
     let selected = networkAccess == option
-    let disabled = option == .tailscale && tailscaleAddress == nil && !selected
+    // Tailscale can't be picked without an address; "This network" can't be
+    // picked without a network to scope it to (see `UserSettings`), so both
+    // show disabled rather than accepting a click that would do nothing.
+    let disabled =
+      (option == .tailscale && tailscaleAddress == nil && !selected)
+      || (option == .localNetwork && !hasIdentifiableNetwork && !selected)
 
     Button {
       setNetworkAccess(option)
@@ -1149,6 +1154,12 @@ struct SettingsView: View {
     }
   }
 
+  /// Whether the current network can be identified, which "This network"
+  /// exposure depends on -- there has to be something to scope the grant to.
+  private var hasIdentifiableNetwork: Bool {
+    NetworkIdentity.currentFingerprint() != nil
+  }
+
   /// What choosing `option` would do -- written for someone deciding, not for
   /// someone reading back their own setting. Worth varying: the warning that
   /// matters for `.localNetwork` (no password, anyone on this wifi) is simply
@@ -1170,6 +1181,12 @@ struct SettingsView: View {
     case .tailscale:
       return "Reachable from your Tailscale devices, anywhere. Stays invisible on the network you're on."
     case .localNetwork:
+      // Exposure is scoped to the network it's granted on, so there has to be
+      // one to scope to. Say why the option is inert rather than describing a
+      // grant that can't be made yet.
+      if !hasIdentifiableNetwork {
+        return "Connect to a network to reach the server from another device."
+      }
       return "Anyone on your current network can reach the server. It has no password -- only turn this on for a network you trust."
     case .custom:
       return "Bound to an address set outside the app."

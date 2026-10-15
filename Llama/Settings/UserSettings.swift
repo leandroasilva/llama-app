@@ -231,10 +231,15 @@ enum UserSettings {
       exposeToNetworkFingerprint = nil
 
     case .localNetwork:
+      // Exposure is scoped to the network it's granted on, so there has to be
+      // one to scope to. Without an identifiable network (wifi off, no default
+      // route) the grant would later apply to whichever network appeared
+      // first, so refuse rather than store it unscoped.
+      guard let fingerprint = NetworkIdentity.currentFingerprint() else { return }
       defaults.set(true, forKey: Keys.exposeToNetwork)
       // Remember which network this was agreed to on, so joining a different
       // one can withdraw it (see `NetworkIdentity`).
-      exposeToNetworkFingerprint = NetworkIdentity.currentFingerprint()
+      exposeToNetworkFingerprint = fingerprint
       // Granting network access is when the server starts needing a key;
       // generate it now so the Settings row can offer it to copy.
       _ = ensureServerAPIKey()

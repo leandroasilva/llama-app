@@ -71,18 +71,26 @@ final class NetworkExposureGuard {
     // changing networks neither widens it nor makes it mean something else.
     guard UserSettings.networkAccess == .localNetwork else { return }
 
-    guard let granted = UserSettings.exposeToNetworkFingerprint else {
-      // Enabled before this existed, or with no default route at the time.
-      // Adopt the current network rather than revoking a setting the user
-      // never saw us scope.
-      UserSettings.exposeToNetworkFingerprint = NetworkIdentity.currentFingerprint()
-      return
-    }
-
     // No identifiable network (wifi off, no gateway) isn't a new network --
     // it's no network. Leave the setting alone; nothing can reach the server
     // anyway.
     guard let current = NetworkIdentity.currentFingerprint() else { return }
+
+    guard let granted = UserSettings.exposeToNetworkFingerprint else {
+      // Exposure was granted on a network we couldn't identify (or before
+      // fingerprinting existed), so there's nothing to compare against. The
+      // network we're on now may not be the one the user meant -- adopting it
+      // would widen "this network" to whatever happened to appear next. Treat
+      // it as unverified and turn off, same as a network change; re-enabling
+      // is one click and this time it's a decision.
+      logger.notice("network access granted without a known network -- turning it off")
+      UserSettings.setNetworkAccess(.off)
+      NotificationCenter.default.post(
+        name: .LBShowMenuHint, object: nil,
+        userInfo: ["message": "Network access turned off — re-enable to confirm this network"])
+      return
+    }
+
     guard current != granted else { return }
 
     logger.notice("joined a different network -- turning network access off")
