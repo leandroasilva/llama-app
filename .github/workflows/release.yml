@@ -236,8 +236,13 @@ jobs:
       - name: Download Sparkle tools
         run: |
           SPARKLE_VERSION="2.8.1"
-          curl -L "https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-for-Swift-Package-Manager.zip" \
+          # Pin the artifact by digest: this tool runs in the release pipeline and
+          # handles SPARKLE_PRIVATE_KEY to sign the appcast, so a swapped or
+          # corrupted download must fail the release loudly rather than run.
+          SPARKLE_SHA256="995f913935fe903d50b3be5344fc52a638f56b39ef7984bf7a44244786d28638"
+          curl -fL "https://github.com/sparkle-project/Sparkle/releases/download/${SPARKLE_VERSION}/Sparkle-for-Swift-Package-Manager.zip" \
             -o build/Sparkle.zip
+          echo "${SPARKLE_SHA256}  build/Sparkle.zip" | shasum -a 256 -c -
           unzip -q build/Sparkle.zip -d build/Sparkle-tools
           chmod +x build/Sparkle-tools/bin/generate_appcast
 
