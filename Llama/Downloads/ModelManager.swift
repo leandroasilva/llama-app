@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import Network
 import Sentry
@@ -263,7 +262,7 @@ class ModelManager: NSObject, URLSessionDataDelegate {
       } catch {
         // Couldn't open/rehash one of the partials — abort the whole model
         // download and close any handles we did open so we don't leak them.
-        for writer in writers { writer.closeHandle() }
+        for writer in writers { writer.close() }
         failDownload(
           model: model,
           reason: "Couldn't open staging file: \(error.localizedDescription)")
@@ -283,7 +282,7 @@ class ModelManager: NSObject, URLSessionDataDelegate {
   /// was being opened off the main actor. Main-actor only.
   func startWriterTask(_ writer: PartialWriter, modelId: String) {
     guard activeDownloads[modelId] != nil else {
-      writer.closeHandle()
+      writer.close()
       return
     }
     let task = makeDataTask(for: writer.url, modelId: modelId, writer: writer)
@@ -312,6 +311,10 @@ class ModelManager: NSObject, URLSessionDataDelegate {
   /// hash over any already-present prefix. `nonisolated async` so the re-hash runs off the
   /// main actor: on a resumed download the existing prefix can be many GB, and hashing it
   /// synchronously on the main actor freezes the UI (spinning-wait cursor) until it finishes.
+  ///
+  /// The file handle and running hash live in the Rust core (`partial.open`), which
+  /// re-hashes the prefix in bounded 1 MB chunks; this just wires up the download
+  /// context the delegate callbacks need.
   nonisolated func openPartialWriter(
     model: Model, cacheDir: URL, url: URL, plan: HFDownloadPlan
   ) async throws -> PartialWriter {
@@ -322,31 +325,24 @@ class ModelManager: NSObject, URLSessionDataDelegate {
     // through to `lastPathComponent`, same value as before — no behavior change.
     let filename = HFCache.repoRelativePath(from: url) ?? url.lastPathComponent
     let partialURL = HFCache.partialPath(cacheDir: cacheDir, modelId: modelId, filename: filename)
-    let dir = partialURL.deletingLastPathComponent()
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
-    // Stat existing partial (0 if absent). Create empty file if missing so FileHandle(forWritingTo:) works.
-    let existing: Int64
-    if FileManager.default.fileExists(atPath: partialURL.path) {
-      existing = FileManager.default.fileSize(atPath: partialURL.path)
-    } else {
-      FileManager.default.createFile(atPath: partialURL.path, contents: nil)
-      existing = 0
+    var args: [String: Any] = ["path": partialURL.path]
+    if let expected = plan.blobHashes[url] { args["expectedBlobHash"] = expected }
+    guard let out = LlamaCore.callJSON("partial.open", args) else {
+      throw HFCacheError(message: "partial.open returned no writer for \(filename)")
     }
-
-    let handle = try FileHandle(forWritingTo: partialURL)
-    try handle.seekToEnd()
-
-    var hasher = SHA256()
-    if existing > 0 {
-      try HFCache.feedHasher(&hasher, from: partialURL)
+    if let error = out["error"] as? String {
+      throw HFCacheError(message: (out["message"] as? String) ?? error)
+    }
+    guard let handle = (out["handle"] as? NSNumber)?.uint64Value else {
+      throw HFCacheError(message: "partial.open returned no handle for \(filename)")
     }
 
     return PartialWriter(
       model: model, cacheDir: cacheDir, plan: plan,
       url: url, filename: filename,
-      partialURL: partialURL, handle: handle, hasher: hasher,
-      bytesWritten: existing,
+      partialURL: partialURL, handle: handle,
+      bytesWritten: (out["bytesWritten"] as? NSNumber)?.int64Value ?? 0,
       expectedBlobHash: plan.blobHashes[url]
     )
   }
@@ -786,7 +782,7 @@ class ModelManager: NSObject, URLSessionDataDelegate {
     // Drop writers and close their handles synchronously so the partial files aren't held open.
     writerTable.sync { writers in
       for id in taskIds {
-        writers.removeValue(forKey: id)?.closeHandle()
+        writers.removeValue(forKey: id)?.close()
       }
     }
   }

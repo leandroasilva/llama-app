@@ -59,6 +59,24 @@ char *llama_core_call(const char *method, const char *args_json);
  */
 void llama_core_free(char *s);
 
+/**
+ * Appends `len` raw bytes from `data` to the streaming `.partial` writer `handle`.
+ *
+ * Deliberately not on the JSON bridge: download bytes are arbitrary binary
+ * (GGUF is not UTF-8), so they cannot ride the `char *args_json` contract that
+ * every other `partial.*` op uses. The JSON ops (`partial.open`,
+ * `partial.digest`, `partial.restart`, ...) stay in place for lifecycle and
+ * reads; this is the one write-side escape hatch.
+ *
+ * Returns 0 on success, -2 when no writer is open at `handle`, -3 when the
+ * write failed, and -1 on a null `data` with a non-zero `len`.
+ *
+ * # Safety
+ * `data` must be NULL only when `len` is 0, else a pointer to at least `len`
+ * readable bytes. `handle` must come from a live `partial.open`.
+ */
+int llama_core_partial_append(uint64_t handle, const uint8_t *data, size_t len);
+
 #ifdef __cplusplus
 }  // extern "C"
 #endif  // __cplusplus

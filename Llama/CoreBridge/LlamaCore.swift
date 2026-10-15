@@ -52,6 +52,18 @@ enum LlamaCore {
     callJSON(method, args)?[key] as? T
   }
 
+  /// Streams raw bytes to a `.partial` writer opened via `partial.open`.
+  ///
+  /// The one write-side call that bypasses the JSON bridge: download bytes are
+  /// arbitrary binary (GGUF is not UTF-8) and can't ride a NUL-terminated C
+  /// string. Returns the core's status code — 0 on success.
+  static func partialAppend(handle: UInt64, data: Data) -> Int32 {
+    data.withUnsafeBytes { raw -> Int32 in
+      let buffer = raw.bindMemory(to: UInt8.self)
+      return llama_core_partial_append(handle, buffer.baseAddress, buffer.count)
+    }
+  }
+
   /// Dispatches `method` and decodes a top-level JSON scalar (string, number,
   /// bool, or null) — methods like `repo.parseQuant` whose whole response is a
   /// bare value rather than an object.

@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import Sentry
 import os.log
@@ -64,7 +63,7 @@ extension ModelManager {
         HFCache.removePartials(cacheDir: writer.cacheDir, modelId: modelId)
       }
       writerTable.sync { $0[taskId] = nil }
-      writer.closeHandle()
+      writer.close()
 
       // Keep Sentry error-grouping stable across releases.
       let nsErr = NSError(
@@ -90,13 +89,10 @@ extension ModelManager {
           logger.warning(
             "Server ignored Range for \(writer.filename); restarting from byte 0")
         }
-        try? writer.handle.truncate(atOffset: 0)
-        try? writer.handle.seek(toOffset: 0)
-        writer.bytesWritten = 0
-        writer.hasher = SHA256()
+        writer.restart()
       }
       if fullSize > 0 {
-        writer.totalExpected = fullSize
+        writer.setTotalExpected(fullSize)
       }
     }
 
@@ -112,16 +108,11 @@ extension ModelManager {
     let taskId = dataTask.taskIdentifier
     let writeFailed = writerTable.sync { writers -> Bool in
       guard let writer = writers[taskId] else { return false }
-      do {
-        try writer.handle.write(contentsOf: data)
-        writer.hasher.update(data: data)
-        writer.bytesWritten += Int64(data.count)
-        return false
-      } catch {
-        logger.error(
-          "Write failed for \(writer.filename): \(error.localizedDescription)")
+      guard writer.append(data) else {
+        logger.error("Write failed for \(writer.filename)")
         return true
       }
+      return false
     }
     if writeFailed {
       // Cancel this task; didCompleteWithError will handle the failure path (including
@@ -155,7 +146,7 @@ extension ModelManager {
 
     if let error {
       let nsError = error as NSError
-      writer?.closeHandle()
+      writer?.close()
 
       // Cancelled: either user cancel or our own short-circuit (416 / HTTP error already handled).
       // In both cases we've already done the cleanup or it doesn't apply.
@@ -222,7 +213,7 @@ extension ModelManager {
   nonisolated private func finalizeTask(
     writer: PartialWriter, dataTask: URLSessionDataTask
   ) {
-    writer.closeHandle()
+    writer.close()
 
     let model = writer.model
     let cacheDir = writer.cacheDir
@@ -242,8 +233,14 @@ extension ModelManager {
       return
     }
 
-    // Digest from the running hasher (covers existing-prefix re-hash at open time, plus streamed bytes).
-    let computed = HFCache.hex(writer.hasher.finalize())
+    // Digest over the bytes on disk, from the core's running hasher (which
+    // covers the existing-prefix re-hash at open time plus streamed bytes).
+    guard let computed = writer.digest() else {
+      try? FileManager.default.removeItem(at: writer.partialURL)
+      handleDownloadFailure(
+        model: model, reason: "Couldn't hash the downloaded file. Try again.")
+      return
+    }
     if let expected = writer.expectedBlobHash {
       let matches: Bool =
         LlamaCore.callValue(

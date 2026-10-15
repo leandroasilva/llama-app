@@ -241,6 +241,35 @@ final class Phase5FixtureTests: XCTestCase {
     XCTAssertEqual((try call("partial.close", ["handle": handle]))["ok"] as? Bool, true)
   }
 
+  /// Binary bytes (NULs, invalid UTF-8) must survive the raw append path that
+  /// production uses (`LlamaCore.partialAppend`), not just the ASCII `text`
+  /// bridge the fixtures above exercise.
+  func testRawAppendIsBinarySafe() throws {
+    let partial = tempDir.appendingPathComponent("binary.gguf.partial").path
+    var out = try call("partial.open", ["path": partial])
+    let handle = (out["handle"] as! NSNumber).uint64Value
+
+    let bytes = Data([
+      0x47, 0x47, 0x55, 0x46, 0x00, 0x01, 0x02, 0x7f, 0x80, 0xff, 0xfe, 0xc3, 0x28, 0x0a, 0x00,
+      0x54, 0x49, 0x54, 0x4c, 0x45, 0x00,
+    ])
+    XCTAssertEqual(LlamaCore.partialAppend(handle: handle, data: bytes), 0)
+    XCTAssertEqual(FileManager.default.contents(atPath: partial), bytes)
+
+    out = try call("partial.digest", ["handle": handle])
+    XCTAssertEqual(out["digest"] as? String, hex(SHA256.hash(data: bytes)))
+
+    // Empty data is a no-op, not an error.
+    XCTAssertEqual(LlamaCore.partialAppend(handle: handle, data: Data()), 0)
+    out = try call("partial.digest", ["handle": handle])
+    XCTAssertEqual(out["digest"] as? String, hex(SHA256.hash(data: bytes)))
+
+    // Unknown handle is classified, not a crash.
+    XCTAssertNotEqual(LlamaCore.partialAppend(handle: 424_242, data: bytes), 0)
+
+    XCTAssertEqual((try call("partial.close", ["handle": handle]))["ok"] as? Bool, true)
+  }
+
   func testFeedHashMissingPathIsClassifiedError() throws {
     let out = try call("partial.feedHash", [
       "path": tempDir.appendingPathComponent("nope").path,

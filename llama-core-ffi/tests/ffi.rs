@@ -2,8 +2,8 @@
 //! channel, and panic containment.
 
 use llama_core_ffi::{
-    llama_core_call, llama_core_free, llama_core_init, llama_core_set_config,
-    llama_core_set_event_cb,
+    llama_core_call, llama_core_free, llama_core_init, llama_core_partial_append,
+    llama_core_set_config, llama_core_set_event_cb,
 };
 use std::ffi::{c_char, CStr, CString};
 use std::sync::{Mutex, OnceLock};
@@ -1135,6 +1135,77 @@ fn fase5_download() {
     assert_eq!(out["error"], "notFound");
 
     // Close drops the registry entry.
+    assert_eq!(
+        call(
+            "partial.close",
+            &serde_json::json!({ "handle": handle }).to_string()
+        )
+        .unwrap(),
+        r#"{"ok":true}"#
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn fase5_partial_append_takes_raw_binary() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let n = SEQ.fetch_add(1, Ordering::SeqCst);
+    let root =
+        std::env::temp_dir().join(format!("llama-core-ffi-pwraw-{}-{n}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("binary.gguf.partial");
+
+    let out: serde_json::Value = serde_json::from_str(
+        &call(
+            "partial.open",
+            &serde_json::json!({ "path": path.to_string_lossy() }).to_string(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let handle = out["handle"].as_u64().expect("handle");
+
+    // GGUF is arbitrary binary: NULs, bytes that are not valid UTF-8 (0xff,
+    // 0xfe), and a lone 0xc3 that would begin a two-byte sequence. None of it
+    // can ride the JSON `char *` bridge, which is why the raw entry point exists.
+    let bytes: [u8; 21] = [
+        0x47, 0x47, 0x55, 0x46, 0x00, 0x01, 0x02, 0x7f, 0x80, 0xff, 0xfe, 0xc3, 0x28, 0x0a, 0x00,
+        0x54, 0x49, 0x54, 0x4c, 0x45, 0x00,
+    ];
+    let rc = unsafe { llama_core_partial_append(handle, bytes.as_ptr(), bytes.len()) };
+    assert_eq!(rc, 0, "raw append must succeed");
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        bytes,
+        "bytes land byte-for-byte"
+    );
+
+    // The running digest equals the one-pass digest over the exact bytes —
+    // so nothing was dropped, reinterpreted as UTF-8, or truncated.
+    let out: serde_json::Value = serde_json::from_str(
+        &call(
+            "partial.digest",
+            &serde_json::json!({ "handle": handle }).to_string(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        out["digest"],
+        "eca56b38b9227c6089910f3d2c00bb395c9c5f00e3d80b8531d07dc05769b238"
+    );
+
+    // A null pointer with a non-zero length is rejected, never dereferenced.
+    let rc = unsafe { llama_core_partial_append(handle, std::ptr::null(), 8) };
+    assert_eq!(rc, -1);
+
+    // An unknown handle is classified, not a panic.
+    let rc = unsafe { llama_core_partial_append(424242, bytes.as_ptr(), 0) };
+    assert_eq!(rc, -2);
+
     assert_eq!(
         call(
             "partial.close",

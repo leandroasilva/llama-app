@@ -201,6 +201,50 @@ pub unsafe extern "C" fn llama_core_free(s: *mut c_char) {
     }));
 }
 
+/// Appends `len` raw bytes from `data` to the streaming `.partial` writer `handle`.
+///
+/// Deliberately not on the JSON bridge: download bytes are arbitrary binary
+/// (GGUF is not UTF-8), so they cannot ride the `char *args_json` contract that
+/// every other `partial.*` op uses. The JSON ops (`partial.open`,
+/// `partial.digest`, `partial.restart`, ...) stay in place for lifecycle and
+/// reads; this is the one write-side escape hatch.
+///
+/// Returns 0 on success, -2 when no writer is open at `handle`, -3 when the
+/// write failed, and -1 on a null `data` with a non-zero `len`.
+///
+/// # Safety
+/// `data` must be NULL only when `len` is 0, else a pointer to at least `len`
+/// readable bytes. `handle` must come from a live `partial.open`.
+#[no_mangle]
+pub unsafe extern "C" fn llama_core_partial_append(
+    handle: u64,
+    data: *const u8,
+    len: usize,
+) -> c_int {
+    if data.is_null() && len > 0 {
+        return -1;
+    }
+    let bytes: &[u8] = if len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(data, len) }
+    };
+    catch_unwind(AssertUnwindSafe(|| {
+        let mut locked = match partial_writers().lock() {
+            Ok(l) => l,
+            Err(_) => return -3,
+        };
+        match locked.get_mut(&handle) {
+            Some(w) => match w.append(bytes) {
+                Ok(()) => 0,
+                Err(_) => -3,
+            },
+            None => -2,
+        }
+    }))
+    .unwrap_or(-3)
+}
+
 fn section_from_value(v: &Value) -> ini::Section {
     let name = v
         .get("name")
