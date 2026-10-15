@@ -249,6 +249,10 @@ pub struct LaunchSpecInput<'a> {
     pub presets_path: &'a str,
     pub log_file_path: &'a str,
     pub hf_cache_directory: &'a str,
+    /// An empty directory for `LLAMA_CACHE`, which keeps router mode from
+    /// auto-discovering models. Owned and created by the host (a private
+    /// per-user location), so the app controls who can write there.
+    pub empty_cache_directory: &'a str,
     pub port: i64,
     pub fit_target_mb: i64,
     pub configured_bind_address: Option<&'a str>,
@@ -317,7 +321,7 @@ pub fn build_launch_spec(input: &LaunchSpecInput<'_>) -> Option<LaunchSpec> {
         ),
         (
             "LLAMA_CACHE".to_string(),
-            "/tmp/llama-empty-cache".to_string(),
+            input.empty_cache_directory.to_string(),
         ),
     ];
 
@@ -458,13 +462,16 @@ mod tests {
             1,
             &[
                 ("GGML_METAL_NO_RESIDENCY", "1"),
-                ("LLAMA_CACHE", "/tmp/llama-empty-cache"),
+                (
+                    "LLAMA_CACHE",
+                    "/Users/x/Library/Application Support/Llama/empty-cache",
+                ),
             ],
         );
         let rendered = s.display_command();
         assert_eq!(
             rendered,
-            "export GGML_METAL_NO_RESIDENCY=1\nexport LLAMA_CACHE=/tmp/llama-empty-cache\n\n/Users/x/llama serve \\\n  --models-preset '/Library/Application Support/Llama/models.ini' \\\n  --log-file /Users/x/Library/Logs/Llama/llama-server.log \\\n  --port 9931 \\\n  --sleep-idle-seconds 300 \\\n  --jinja \\\n  serve  # custom arguments"
+            "export GGML_METAL_NO_RESIDENCY=1\nexport LLAMA_CACHE='/Users/x/Library/Application Support/Llama/empty-cache'\n\n/Users/x/llama serve \\\n  --models-preset '/Library/Application Support/Llama/models.ini' \\\n  --log-file /Users/x/Library/Logs/Llama/llama-server.log \\\n  --port 9931 \\\n  --sleep-idle-seconds 300 \\\n  --jinja \\\n  serve  # custom arguments"
         );
         assert!(rendered.contains("serve  # custom arguments"));
     }
@@ -606,6 +613,7 @@ mod tests {
             presets_path: "/Users/x/Library/Application Support/Llama/models.ini",
             log_file_path: "/Users/x/Library/Logs/Llama/llama-server.log",
             hf_cache_directory: "/Users/x/Library/Caches/Llama",
+            empty_cache_directory: "/Users/x/Library/Application Support/Llama/empty-cache",
             port: 9931,
             fit_target_mb: 1024,
             configured_bind_address: Some("100.64.0.1"),
@@ -656,7 +664,7 @@ mod tests {
             spec.env[2],
             (
                 "LLAMA_CACHE".to_string(),
-                "/tmp/llama-empty-cache".to_string()
+                "/Users/x/Library/Application Support/Llama/empty-cache".to_string()
             )
         );
         // Exposed bind => the API key rides along in the environment (never as
@@ -681,6 +689,7 @@ mod tests {
                 presets_path: "/tmp/models.ini",
                 log_file_path: "/tmp/llama-server.log",
                 hf_cache_directory: "/tmp/hf-cache",
+                empty_cache_directory: "/tmp/empty-cache",
                 port: 9931,
                 fit_target_mb: 1024,
                 configured_bind_address: bind,

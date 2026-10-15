@@ -1430,6 +1430,7 @@ fn dispatch_server(method: &str, args: &Value) -> Value {
                 presets_path: arg_str(args, "presetsPath"),
                 log_file_path: arg_str(args, "logFilePath"),
                 hf_cache_directory: arg_str(args, "hfCacheDirectory"),
+                empty_cache_directory: arg_str(args, "emptyCacheDirectory"),
                 port: arg_i(args, "port"),
                 fit_target_mb: arg_i(args, "fitTargetMb"),
                 configured_bind_address: args.get("configuredBindAddress").and_then(Value::as_str),

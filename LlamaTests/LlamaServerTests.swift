@@ -34,8 +34,14 @@ final class LlamaServerTests: XCTestCase {
     XCTAssertEqual(server.state, .idle)
   }
 
-  func testEmptyCachePathIsFixed() {
-    XCTAssertEqual(LlamaServer.emptyCachePath, "/tmp/llama-empty-cache")
+  func testEmptyCachePathIsPrivateToTheUser() {
+    let path = LlamaServer.emptyCachePath
+    // Never a shared, world-writable location like /tmp -- another user could
+    // pre-create the name there and point it at their own files. It lives
+    // under the app's own Application Support directory instead.
+    XCTAssertFalse(path.hasPrefix("/tmp"))
+    XCTAssertTrue(path.contains("Application Support"))
+    XCTAssertTrue(path.hasSuffix("empty-cache"))
   }
 
   func testLogFilePathIsInLibrary() {

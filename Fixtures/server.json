@@ -26,9 +26,9 @@
       "extraArgCount": 1,
       "env": [
         ["GGML_METAL_NO_RESIDENCY", "1"],
-        ["LLAMA_CACHE", "/tmp/llama-empty-cache"]
+        ["LLAMA_CACHE", "/Users/x/Library/Application Support/Llama/empty-cache"]
       ],
-      "command": "export GGML_METAL_NO_RESIDENCY=1\nexport LLAMA_CACHE=/tmp/llama-empty-cache\n\n/Users/x/llama serve \\\n  --models-preset '/Library/Application Support/Llama/models.ini' \\\n  --log-file /Users/x/Library/Logs/Llama/llama-server.log \\\n  --port 9931 \\\n  --sleep-idle-seconds 300 \\\n  --jinja \\\n  serve  # custom arguments"
+      "command": "export GGML_METAL_NO_RESIDENCY=1\nexport LLAMA_CACHE='/Users/x/Library/Application Support/Llama/empty-cache'\n\n/Users/x/llama serve \\\n  --models-preset '/Library/Application Support/Llama/models.ini' \\\n  --log-file /Users/x/Library/Logs/Llama/llama-server.log \\\n  --port 9931 \\\n  --sleep-idle-seconds 300 \\\n  --jinja \\\n  serve  # custom arguments"
     },
     {
       "name": "no-env-no-extra",
@@ -249,6 +249,7 @@
       "presetsPath": "<TMP>/Library/Application Support/Llama/models.ini",
       "logFilePath": "<TMP>/Library/Logs/Llama/llama-server.log",
       "hfCacheDirectory": "<TMP>/Library/Caches/Llama",
+      "emptyCacheDirectory": "<TMP>/Library/Application Support/Llama/empty-cache",
       "port": 9931,
       "fitTargetMb": 1024,
       "configuredBindAddress": null,
@@ -287,7 +288,7 @@
         "env": [
           ["GGML_METAL_NO_RESIDENCY", "1"],
           ["HF_HUB_CACHE", "<TMP>/Library/Caches/Llama"],
-          ["LLAMA_CACHE", "/tmp/llama-empty-cache"]
+          ["LLAMA_CACHE", "<TMP>/Library/Application Support/Llama/empty-cache"]
         ]
       }
     },
@@ -297,6 +298,7 @@
       "presetsPath": "<TMP>/models.ini",
       "logFilePath": "<TMP>/llama-server.log",
       "hfCacheDirectory": "<TMP>/hf-cache",
+      "emptyCacheDirectory": "<TMP>/empty-cache",
       "port": 9931,
       "fitTargetMb": 1024,
       "configuredBindAddress": "100.64.0.1",
@@ -336,7 +338,7 @@
         "env": [
           ["GGML_METAL_NO_RESIDENCY", "1"],
           ["HF_HUB_CACHE", "<TMP>/hf-cache"],
-          ["LLAMA_CACHE", "/tmp/llama-empty-cache"],
+          ["LLAMA_CACHE", "<TMP>/empty-cache"],
           ["LLAMA_API_KEY", "fixture-key"]
         ]
       }
@@ -347,6 +349,7 @@
       "presetsPath": "<TMP>/models.ini",
       "logFilePath": "<TMP>/llama-server.log",
       "hfCacheDirectory": "<TMP>/hf-cache",
+      "emptyCacheDirectory": "<TMP>/empty-cache",
       "port": 9931,
       "fitTargetMb": 0,
       "configuredBindAddress": null,

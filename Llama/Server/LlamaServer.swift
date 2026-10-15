@@ -346,8 +346,15 @@ class LlamaServer {
   /// An empty dir pointed at by `LLAMA_CACHE` to suppress router mode's
   /// automatic model discovery. Without it, llama-server scans the cache and
   /// lists every GGUF it finds; we manage the model list ourselves via
-  /// `--models-preset`. A fixed `/tmp` path keeps the rendered command short.
-  nonisolated static let emptyCachePath = "/tmp/llama-empty-cache"
+  /// `--models-preset`.
+  ///
+  /// Lives under Application Support rather than `/tmp`: `/tmp` is shared and
+  /// world-writable, so another user (or anything on the machine) could
+  /// pre-create the name and point it at their own files. This path is
+  /// created by the app, in a directory only the user can write to, so what
+  /// the server reads from it is always what we left there.
+  nonisolated static let emptyCachePath = UserSettings.appSupportDir
+    .appendingPathComponent("empty-cache", isDirectory: true).path
 
   /// Where the server writes its log (`--log-file`). `~/Library/Logs/<App>` is
   /// the macOS convention for app logs, and Console.app lists `.log` files there
@@ -393,6 +400,7 @@ class LlamaServer {
       "presetsPath": UserSettings.appSupportDir.appendingPathComponent("models.ini").path,
       "logFilePath": Self.logFilePath,
       "hfCacheDirectory": UserSettings.hfCacheDirectory.path,
+      "emptyCacheDirectory": Self.emptyCachePath,
       "port": Self.port,
       "fitTargetMb": Int(Model.fitTargetMb),
       "addresses": LocalNetwork.ipv4Addresses().map { [$0.key, $0.value] },
