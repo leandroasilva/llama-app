@@ -1342,7 +1342,7 @@ fn fase6_server() {
     assert_eq!(spec["spec"]["extraArgCount"], 2);
     assert_eq!(spec["spec"]["env"][1][0], "HF_HUB_CACHE");
 
-    // stale bind falls back to unset => no --host argument
+    // stale bind falls back to loopback => explicit --host 127.0.0.1.
     let spec = build(serde_json::json!({
         "llamaPath": format!("{tmp}/bin/llama"),
         "presetsPath": format!("{tmp}/models.ini"),
@@ -1365,8 +1365,31 @@ fn fase6_server() {
         .iter()
         .map(|v| v.as_str().unwrap().to_string())
         .collect();
-    assert!(!args.contains(&"--host".to_string()));
+    let host_idx = args.iter().position(|a| a == "--host").unwrap();
+    assert_eq!(args[host_idx + 1], "127.0.0.1");
     assert!(args.contains(&"--spec-default".to_string()));
+
+    // no configured bind at all => still an explicit loopback --host.
+    let spec = build(serde_json::json!({
+        "llamaPath": format!("{tmp}/bin/llama"),
+        "presetsPath": format!("{tmp}/models.ini"),
+        "logFilePath": format!("{tmp}/llama-server.log"),
+        "hfCacheDirectory": format!("{tmp}/hf-cache"),
+        "port": 9931,
+        "fitTargetMb": 1024,
+        "addresses": [["en0", "192.168.1.5"]],
+        "primaryInterface": "en0",
+        "agentMode": false,
+        "extraArgs": [],
+    }));
+    let args: Vec<String> = spec["spec"]["arguments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    let host_idx = args.iter().position(|a| a == "--host").unwrap();
+    assert_eq!(args[host_idx + 1], "127.0.0.1");
 
     // no binary => classified, not a panic.
     let out: serde_json::Value = serde_json::from_str(

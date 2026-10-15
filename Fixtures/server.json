@@ -275,6 +275,8 @@
           "1",
           "--fit-target",
           "1024",
+          "--host",
+          "127.0.0.1",
           "--sleep-idle-seconds",
           "300",
           "--jinja",

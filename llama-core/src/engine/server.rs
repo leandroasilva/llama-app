@@ -292,17 +292,23 @@ pub fn build_launch_spec(input: &LaunchSpecInput<'_>) -> Option<LaunchSpec> {
         input.fit_target_mb.to_string(),
     ]);
 
+    // Always pass an explicit `--host`, defaulting to loopback. Omitting it when
+    // exposure is Off left the bind to llama.cpp's own resolution, where a stray
+    // `LLAMA_ARG_HOST` in the inherited environment or a `host=` line in
+    // `~/.config/llama.cpp/config.ini` could expose the server on the network
+    // while the UI -- and the consent guard -- still reported "Off". A present
+    // CLI flag wins over both, so making loopback explicit closes that gap.
     let local_addrs: Vec<String> = input
         .address_by_interface
         .iter()
         .map(|(_, v)| v.clone())
         .collect();
-    if let Some(bind) = effective_bind_address(input.configured_bind_address, &local_addrs) {
-        arguments.extend([
-            "--host".to_string(),
-            host_argument(&bind, input.current_version),
-        ]);
-    }
+    let bind = effective_bind_address(input.configured_bind_address, &local_addrs)
+        .unwrap_or_else(|| "127.0.0.1".to_string());
+    arguments.extend([
+        "--host".to_string(),
+        host_argument(&bind, input.current_version),
+    ]);
 
     if let Some(seconds) = input.sleep_idle_seconds {
         arguments.extend(["--sleep-idle-seconds".to_string(), seconds.to_string()]);

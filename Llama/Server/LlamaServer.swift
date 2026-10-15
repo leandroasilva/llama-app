@@ -568,7 +568,16 @@ class LlamaServer {
     process.arguments = spec.arguments
     process.currentDirectoryURL = URL(fileURLWithPath: workingDirectory)
 
+    // Drop any inherited LLAMA_ARG_* variables. llama.cpp maps every flag to an
+    // LLAMA_ARG_<NAME> env var, and an env var still governs the setting when the
+    // matching CLI flag is absent. We pass an explicit --host either way, but a
+    // stray LLAMA_ARG_* in the parent environment (a shell, a dev tool, a copied
+    // Docker-style env) could otherwise rebind or reconfigure the server behind
+    // the exposure consent guard's back.
     var environment = ProcessInfo.processInfo.environment
+    for key in environment.keys where key.hasPrefix("LLAMA_ARG_") {
+      environment.removeValue(forKey: key)
+    }
     for (key, value) in spec.env { environment[key] = value }
     process.environment = environment
 
