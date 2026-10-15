@@ -24,10 +24,11 @@ enum LaunchAtLogin {
     // app opts in by default; in Debug the toggle in Settings still works.
     #if DEBUG
       return
+    #else
+      guard !UserSettings.hasSetDefaultLaunchAtLogin else { return }
+      UserSettings.hasSetDefaultLaunchAtLogin = true
+      setEnabled(true)
     #endif
-    guard !UserSettings.hasSetDefaultLaunchAtLogin else { return }
-    UserSettings.hasSetDefaultLaunchAtLogin = true
-    setEnabled(true)
   }
 
   @discardableResult
