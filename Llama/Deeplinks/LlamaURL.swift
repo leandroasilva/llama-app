@@ -31,8 +31,14 @@ enum LlamaURL: Equatable {
   /// canonicalization, repo existence) happens downstream in `HFRepoResolver`
   /// / `GGUFQuant`.
   static func parse(_ url: URL) -> LlamaURL? {
-    guard let scheme = url.scheme?.lowercased(), registeredSchemes.contains(scheme)
-    else { return nil }
+    parse(url, schemes: registeredSchemes)
+  }
+
+  /// Same as `parse(_:)` but with an explicit scheme allowlist. Kept internal so
+  /// tests can pin `llama` even though they run inside the dev build (which only
+  /// registers `llama-dev`/`llamabarn-dev`).
+  static func parse(_ url: URL, schemes: Set<String>) -> LlamaURL? {
+    guard let scheme = url.scheme?.lowercased(), schemes.contains(scheme) else { return nil }
 
     // Use URLComponents to get a tolerant parse of the query string.
     // `host` normalizes to lowercase, so case in the authority doesn't matter.
@@ -67,16 +73,21 @@ enum LlamaURL: Equatable {
     return .install(repo: repo, quant: normalizedQuant)
   }
 
-  /// `repo` must be exactly `{org}/{name}` — one slash, no whitespace, non-empty
-  /// halves. HF enforces much stricter rules on repo names server-side; we don't
-  /// duplicate them here (a bogus repo just 404s on `/api/models/{repo}`).
+  /// `repo` must be exactly `{org}/{name}` — one slash, non-empty halves, and
+  /// only the characters Hugging Face allows in a repo name (`A–Z a–z 0–9 . _ -`).
+  ///
+  /// The charset is a safety constraint, not just tidiness: `repo` is
+  /// interpolated into `https://huggingface.co/api/models/{repo}` downstream, so
+  /// a value carrying `?`, `#`, or `/` (reachable by percent-encoding the
+  /// deeplink) would let a link rewrite the request URL. HF enforces much
+  /// stricter rules server-side; this is deliberately a strict subset.
   private static func isValidRepo(_ s: String) -> Bool {
     let parts = s.split(separator: "/", omittingEmptySubsequences: false)
     guard parts.count == 2 else { return false }
-    for part in parts {
-      guard !part.isEmpty else { return false }
-      if part.contains(where: { $0.isWhitespace }) { return false }
+    let allowed = CharacterSet(
+      charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-")
+    return parts.allSatisfy { part in
+      !part.isEmpty && part.unicodeScalars.allSatisfy(allowed.contains)
     }
-    return true
   }
 }
