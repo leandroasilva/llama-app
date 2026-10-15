@@ -213,5 +213,31 @@ final class Phase3FixtureTests: XCTestCase {
       let out = try call("net.sameHostRedirect", args)
       XCTAssertEqual(out["value"] as? Bool, c["expected"] as? Bool)
     }
+
+    for c in try XCTUnwrap(f["hosts"] as? [[String: Any]]) {
+      let out = try call("hfRequest.isHuggingfaceHost", ["url": c["url"] ?? ""])
+      XCTAssertEqual(
+        out["value"] as? Bool, c["expected"] as? Bool, "host \(c["url"] ?? "")")
+    }
+  }
+
+  /// A redirect to a Hugging Face host keeps the token; a hop to any other host
+  /// must not carry it. This is the download path's version of the same rule
+  /// `HFRequest.make` applies when the request is first built.
+  func testRedirectRequestScopesTokenToHuggingFace() {
+    func request(_ url: String) -> URLRequest {
+      var r = URLRequest(url: URL(string: url)!)
+      r.setValue("Bearer hf_secret", forHTTPHeaderField: "Authorization")
+      r.setValue("llama-app/test", forHTTPHeaderField: "User-Agent")
+      return r
+    }
+
+    let onHF = HFRequest.redirectRequest(request("https://cdn-lfs.huggingface.co/x"))
+    XCTAssertEqual(onHF.value(forHTTPHeaderField: "Authorization"), "Bearer hf_secret")
+    XCTAssertEqual(onHF.value(forHTTPHeaderField: "User-Agent"), "llama-app/test")
+
+    let offHF = HFRequest.redirectRequest(request("https://cas-bridge.xethub.hf.co/x"))
+    XCTAssertNil(offHF.value(forHTTPHeaderField: "Authorization"))
+    XCTAssertEqual(offHF.value(forHTTPHeaderField: "User-Agent"), "llama-app/test")
   }
 }

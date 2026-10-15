@@ -234,6 +234,12 @@ struct RedirectCase {
 }
 
 #[derive(Deserialize)]
+struct HostCase {
+    url: String,
+    expected: bool,
+}
+
+#[derive(Deserialize)]
 struct HttpFixture {
     #[serde(rename = "testUserAgent")]
     test_user_agent: String,
@@ -245,6 +251,7 @@ struct HttpFixture {
     #[serde(rename = "commitHash")]
     commit_hash: Vec<CommitHashCase>,
     redirect: Vec<RedirectCase>,
+    hosts: Vec<HostCase>,
 }
 
 fn response_with(headers: &[(&str, &str)]) -> HttpResponse {
@@ -304,6 +311,15 @@ fn hf_http_fixtures() {
             "redirect {:?} -> {:?}",
             c.from,
             c.to
+        );
+    }
+
+    for c in &f.hosts {
+        assert_eq!(
+            hf_request::is_huggingface_host(&c.url),
+            c.expected,
+            "host {}",
+            c.url
         );
     }
 }

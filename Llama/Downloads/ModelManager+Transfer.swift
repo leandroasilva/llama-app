@@ -16,6 +16,18 @@ extension ModelManager {
   // MARK: - URLSessionDataDelegate
 
   nonisolated func urlSession(
+    _ session: URLSession, task: URLSessionTask,
+    willPerformHTTPRedirection response: HTTPURLResponse,
+    newRequest request: URLRequest,
+    completionHandler: @escaping (URLRequest?) -> Void
+  ) {
+    // Follow the redirect -- HF serves the file bytes from a CDN -- but never
+    // let the token ride the hop off Hugging Face. `redirectRequest` re-applies
+    // the same rule `make` used, so the two can't drift.
+    completionHandler(HFRequest.redirectRequest(request))
+  }
+
+  nonisolated func urlSession(
     _ session: URLSession, dataTask: URLSessionDataTask,
     didReceive response: URLResponse,
     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void

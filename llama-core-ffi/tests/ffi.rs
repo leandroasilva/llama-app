@@ -553,6 +553,23 @@ fn fase3_network() {
         r#"{"headers":[["User-Agent","llama-app/1.2.3 (macOS 15.2; arm64)"],["Authorization","Bearer hf_abc"]]}"#
     );
 
+    assert_eq!(
+        call(
+            "hfRequest.isHuggingfaceHost",
+            r#"{"url":"https://cdn-lfs.huggingface.co/x"}"#
+        )
+        .unwrap(),
+        r#"{"value":true}"#
+    );
+    assert_eq!(
+        call(
+            "hfRequest.isHuggingfaceHost",
+            r#"{"url":"https://cas-bridge.xethub.hf.co/x"}"#
+        )
+        .unwrap(),
+        r#"{"value":false}"#
+    );
+
     let bh = serde_json::json!({
         "status": 200,
         "headers": [["X-Linked-Etag", "\"abc123\""]]

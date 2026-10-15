@@ -85,5 +85,13 @@
     { "from": "huggingface.co", "to": "cdn-lfs.huggingface.co", "expected": false },
     { "from": null, "to": "huggingface.co", "expected": false },
     { "from": "huggingface.co", "to": null, "expected": false }
+  ],
+  "hosts": [
+    { "url": "https://huggingface.co/org/repo/resolve/main/x.gguf", "expected": true },
+    { "url": "https://cdn-lfs.huggingface.co/x", "expected": true },
+    { "url": "https://cas-bridge.xethub.hf.co/x", "expected": false },
+    { "url": "https://evilhuggingface.co/x", "expected": false },
+    { "url": "https://example.com/x", "expected": false },
+    { "url": "not a url", "expected": false }
   ]
 }

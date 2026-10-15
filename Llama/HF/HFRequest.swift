@@ -24,4 +24,20 @@ enum HFRequest {
     for header in headers { request.setValue(header[1], forHTTPHeaderField: header[0]) }
     return request
   }
+
+  /// The request to perform when a task is redirected. Hugging Face hands the
+  /// actual bytes off to a CDN, so the hop must be followed -- but `make` only
+  /// ever attaches the token to Hugging Face URLs, and a redirect can point
+  /// anywhere. Re-derive the rule for the new URL and drop `Authorization`
+  /// whenever the hop leaves Hugging Face, so the token can't be carried off by
+  /// a redirect (e.g. HF → `cas-bridge.xethub.hf.co`).
+  static func redirectRequest(_ request: URLRequest) -> URLRequest {
+    let isHF: Bool = LlamaCore.callValue(
+      "hfRequest.isHuggingfaceHost", "value",
+      ["url": request.url?.absoluteString ?? ""]) ?? false
+    guard !isHF else { return request }
+    var stripped = request
+    stripped.setValue(nil, forHTTPHeaderField: "Authorization")
+    return stripped
+  }
 }

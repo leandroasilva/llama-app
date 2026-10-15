@@ -1028,6 +1028,9 @@ fn dispatch_hf_request(method: &str, args: &Value) -> Value {
                     .collect();
             json!({ "headers": headers })
         }
+        "hfRequest.isHuggingfaceHost" => json!({
+            "value": hf_request::is_huggingface_host(arg_str(args, "url"))
+        }),
         _ => json!({ "error": format!("unknown method: {method}") }),
     }
 }
