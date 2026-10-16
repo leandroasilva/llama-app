@@ -108,8 +108,14 @@ jobs:
           # Strip 'v' prefix for MARKETING_VERSION (must be numeric like "1.2.3", not "v1.2.3")
           VERSION="${{ steps.version.outputs.version }}"
           VERSION_NUM="${VERSION#v}"
-          # Use GitHub run number as build version for Sparkle ordering
-          BUILD_NUMBER="${{ github.run_number }}"
+          # Sparkle compares this build number against both the installed build
+          # and the version the user last "skipped", and it hides any appcast
+          # item whose version is not greater than the skipped one. A run-number
+          # scheme fails that test against a date-shaped skip (a stored
+          # 261008.1634 outranked every run-number release, so none of them were
+          # ever offered). A packed UTC date+time grows monotonically and always
+          # post-dates an older skip.
+          BUILD_NUMBER="$(date -u +%y%m%d%H%M)"
 
           xcodebuild archive \
             -scheme Llama \
