@@ -9,6 +9,14 @@ enum AppInfo {
     Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?"
   }
 
+  /// Whether this is a build shipped from a release. Unreleased builds report
+  /// version `0.0.0` (see `userAgent`) but keep the shipped bundle id in Release
+  /// configuration, so anything keyed on "is this the real app" -- the updater
+  /// in particular -- has to check the version, not just `#if DEBUG`.
+  static var isReleasedBuild: Bool {
+    shortVersion != "0.0.0" && shortVersion != "?"
+  }
+
   /// Identifies the app in outbound HTTP requests.
   ///
   /// URLSession's default agent is derived from the bundle name — `Llama/0.42.0

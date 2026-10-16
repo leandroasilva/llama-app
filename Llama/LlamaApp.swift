@@ -125,11 +125,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     LaunchAtLogin.enableOnFirstLaunch()
 
     // Set up automatic updates using Sparkle framework
-    // Skip starting the updater for debug builds to avoid false update prompts
+    // Skip starting the updater for debug builds to avoid false update prompts,
+    // and for unpublished Release builds too: they keep the shipped bundle id,
+    // so their checks would write Sparkle's skip state into the real app's
+    // defaults and can suppress updates there.
     #if DEBUG
       let startUpdater = false
     #else
-      let startUpdater = true
+      let startUpdater = AppInfo.isReleasedBuild
     #endif
     updaterController = SPUStandardUpdaterController(
       startingUpdater: startUpdater,
@@ -197,13 +200,40 @@ extension AppDelegate: SPUStandardUserDriverDelegate {
     true
   }
 
+  // Sparkle asks whether it should present a *scheduled* update itself. We only
+  // let it through when it proposes immediate focus (app just launched, or the
+  // machine has been idle), because for the rest of the time a menu-bar app's
+  // alert opens behind whatever the user is doing and goes unnoticed. Otherwise
+  // we take over and raise the menu's own reminder.
+  func standardUserDriverShouldHandleShowingScheduledUpdate(
+    _ update: SUAppcastItem, andInImmediateFocus immediateFocus: Bool
+  ) -> Bool {
+    immediateFocus
+  }
+
   // Called when Sparkle is about to show an update dialog.
   // We use this to switch from menu bar mode to dock app mode so the dialog appears properly.
   func standardUserDriverWillHandleShowingUpdate(
     _ handleShowingUpdate: Bool, forUpdate update: SUAppcastItem, state: SPUUserUpdateState
   ) {
-    // Always show in dock when update dialog will appear
-    NSApp.setActivationPolicy(.regular)
+    if handleShowingUpdate {
+      // Always show in dock when update dialog will appear
+      NSApp.setActivationPolicy(.regular)
+    } else {
+      // We're showing the reminder instead, so point the menu at the new version.
+      // Sparkle's delegate methods are nonisolated but delivered on the main
+      // thread, matching how the menu controller touches AppKit.
+      MainActor.assumeIsolated {
+        menuController?.setUpdateAvailable(update.displayVersionString)
+      }
+    }
+  }
+
+  // The user is looking at the real alert now, so our reminder has done its job.
+  func standardUserDriverDidReceiveUserAttention(forUpdate update: SUAppcastItem) {
+    MainActor.assumeIsolated {
+      menuController?.setUpdateAvailable(nil)
+    }
   }
 
   // Called when the update process is completely finished (installed, skipped, or dismissed).
@@ -211,6 +241,9 @@ extension AppDelegate: SPUStandardUserDriverDelegate {
   func standardUserDriverWillFinishUpdateSession() {
     // Return to menu bar mode
     NSApp.setActivationPolicy(.accessory)
+    MainActor.assumeIsolated {
+      menuController?.setUpdateAvailable(nil)
+    }
   }
 }
 
