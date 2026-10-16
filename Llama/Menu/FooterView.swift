@@ -9,16 +9,36 @@ final class FooterView: ItemView {
   /// Where that binary comes from -- unmanaged installs get a marker ("· brew"
   /// or "· ext") so a stale version isn't mistaken for a bug.
   private let llamaOrigin: LlamaBinaries.Origin
+  /// Version Sparkle is holding back as a gentle reminder, or nil if none. Shown
+  /// beside the running version ("0.0.8 → 0.0.9") because a background app has
+  /// no dock badge to point at, and its update alert can open behind other apps.
+  private var updateVersion: String?
+
+  /// The running version, clickable to run an update check. A plain label (not
+  /// an NSButton) so its text starts at the exact content edge; a borderless
+  /// button's cell adds a ~2px inset that left it looking misaligned against the
+  /// header and model rows. Clickable via a gesture, matching the menu's other
+  /// inline links (WebUI, "models").
+  private lazy var versionLabel: NSTextField = {
+    let label = Theme.secondaryLabel()
+    label.isSelectable = false
+    label.translatesAutoresizingMaskIntoConstraints = false
+    label.addGestureRecognizer(
+      NSClickGestureRecognizer(target: self, action: #selector(checkForUpdatesClicked)))
+    return label
+  }()
 
   init(
     llamaVersion: String?,
     llamaOrigin: LlamaBinaries.Origin,
+    updateVersion: String?,
     onCheckForUpdates: @escaping () -> Void,
     onOpenSettings: @escaping () -> Void,
     onQuit: @escaping () -> Void
   ) {
     self.llamaVersion = llamaVersion
     self.llamaOrigin = llamaOrigin
+    self.updateVersion = updateVersion
     self.onCheckForUpdates = onCheckForUpdates
     self.onOpenSettings = onOpenSettings
     self.onQuit = onQuit
@@ -35,21 +55,7 @@ final class FooterView: ItemView {
   }
 
   private func setup() {
-    // Version label -- a plain label (not an NSButton) so its text starts at the
-    // exact content edge; a borderless button's cell adds a ~2px inset that left
-    // it looking misaligned against the header and model rows. Clickable via a
-    // gesture, matching the menu's other inline links (WebUI, "models").
-    let versionLabel = Theme.secondaryLabel()
-    versionLabel.attributedStringValue = NSAttributedString(
-      string: appVersionText,
-      attributes: Theme.secondaryAttributes(color: Theme.Colors.textPrimary)
-    )
-    versionLabel.isSelectable = false
-    versionLabel.translatesAutoresizingMaskIntoConstraints = false
-    let versionClick = NSClickGestureRecognizer(
-      target: self, action: #selector(checkForUpdatesClicked))
-    versionLabel.addGestureRecognizer(versionClick)
-
+    refreshVersionLabel()
     // Llama Version Label -- the build of the binary actually being driven.
     // Unmanaged installs get a marker ("· brew" for Homebrew, "· ext" for
     // anything else), since the app won't update them and their version can
@@ -99,14 +105,34 @@ final class FooterView: ItemView {
   @objc private func openSettingsClicked() { onOpenSettings() }
   @objc private func quitClicked() { onQuit() }
 
+  /// Records the update Sparkle is holding back (nil when there is none) and
+  /// re-renders the version label. Lets the menu controller reflect a new update
+  /// without rebuilding an already-open menu.
+  func setUpdateVersion(_ version: String?) {
+    guard updateVersion != version else { return }
+    updateVersion = version
+    refreshVersionLabel()
+  }
+
+  private func refreshVersionLabel() {
+    versionLabel.attributedStringValue = NSAttributedString(
+      string: appVersionText,
+      attributes: Theme.secondaryAttributes(color: Theme.Colors.textPrimary)
+    )
+  }
+
   private var appVersionText: String {
+    let running: String
     #if DEBUG
-      return "dev"
+      running = "dev"
     #else
       let version = AppInfo.shortVersion
-      if version == "0.0.0" { return AppInfo.buildNumber }
-      return version
+      // Unreleased builds report 0.0.0, so pair it with the build number rather
+      // than printing a bare number that reads like a version of its own.
+      running = version == "0.0.0" ? "0.0.0 (\(AppInfo.buildNumber))" : version
     #endif
+    guard let updateVersion else { return running }
+    return "\(running) → \(updateVersion)"
   }
 }
 

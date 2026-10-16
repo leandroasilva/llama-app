@@ -50,6 +50,12 @@ final class MenuController: NSObject, NSMenuDelegate {
 
   private var hintPopover: HintPopover?
 
+  /// Version Sparkle found on a scheduled check and is holding back as a gentle
+  /// reminder, or nil. Drives the icon badge and the footer's "→ X" hint; the
+  /// app delegate sets it when it takes over from the standard update driver and
+  /// clears it once the user has seen the alert.
+  private var updateAvailable: String?
+
   /// A download has finished that the user hasn't seen yet (i.e. hasn't opened
   /// the menu since). Drives the checkmark badge on the icon; cleared the next
   /// time the menu opens. In-memory only -- downloads run only while the app is
@@ -156,10 +162,13 @@ final class MenuController: NSObject, NSMenuDelegate {
   /// The SF Symbol to badge the icon with, or nil for a plain icon. Live download
   /// activity takes precedence over an unseen completion -- while anything is
   /// downloading we show the down-arrow; once it all settles, a checkmark flags a
-  /// completion the user hasn't seen yet.
+  /// completion the user hasn't seen yet. An available update is long-lived by
+  /// comparison, so it queues behind those transient signals and reappears once
+  /// they clear.
   private var statusBadgeSymbol: String? {
     if !modelManager.downloadingModels.isEmpty { return "arrow.down" }
     if hasUnseenCompletion { return "checkmark" }
+    if updateAvailable != nil { return "sparkles" }
     return nil
   }
 
@@ -494,8 +503,20 @@ final class MenuController: NSObject, NSMenuDelegate {
         view.refresh()
       } else if let view = item.view as? ModelPageHeaderView {
         view.refresh()
+      } else if let view = item.view as? FooterView {
+        view.setUpdateVersion(updateAvailable)
       }
     }
+  }
+
+  /// Records the update Sparkle is holding back as a gentle reminder, or clears
+  /// it once the user has seen or acted on it. A menu-bar app has no dock badge
+  /// to fall back on, so the reminder has to live in the menu: a badge on the
+  /// status icon plus the target version in the footer.
+  func setUpdateAvailable(_ version: String?) {
+    guard updateAvailable != version else { return }
+    updateAvailable = version
+    refresh()
   }
 
   private func addFooter(to menu: NSMenu) {
@@ -504,6 +525,7 @@ final class MenuController: NSObject, NSMenuDelegate {
     let footerView = FooterView(
       llamaVersion: LlamaInstallManager.shared.currentVersion?.tag,
       llamaOrigin: LlamaInstallManager.shared.currentOrigin,
+      updateVersion: updateAvailable,
       onCheckForUpdates: checkForUpdates,
       onOpenSettings: { [weak self] in self?.openSettings() },
       onQuit: { [weak self] in self?.quitApp() }
