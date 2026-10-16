@@ -161,15 +161,13 @@ private struct ProcessMemorySnapshot {
   }
 
   private static func physicalFootprint(pid: pid_t) -> UInt64? {
-    let size = MemoryLayout<rusage_info_v4>.size
-    var buffer: rusage_info_t? = UnsafeMutableRawPointer.allocate(
-      byteCount: size, alignment: MemoryLayout<rusage_info_v4>.alignment)
-    defer {
-      buffer?.deallocate()
+    var info = rusage_info_v4()
+    let result = withUnsafeMutableBytes(of: &info) {
+      proc_pid_rusage(
+        pid, RUSAGE_INFO_V4,
+        $0.baseAddress?.assumingMemoryBound(to: rusage_info_t?.self))
     }
-    guard proc_pid_rusage(pid, RUSAGE_INFO_V4, &buffer) == 0,
-      let pointer = buffer
-    else { return nil }
-    return pointer.assumingMemoryBound(to: rusage_info_v4.self).pointee.ri_phys_footprint
+    guard result == 0 else { return nil }
+    return info.ri_phys_footprint
   }
 }
