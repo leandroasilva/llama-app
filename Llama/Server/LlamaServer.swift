@@ -176,6 +176,7 @@ class LlamaServer {
   private var healthCheckTask: Task<Void, Error>?
   private let logger = Logger(subsystem: Logging.subsystem, category: "LlamaServer")
   private let api = LlamaServerAPI()
+  private let loadMetrics = ModelLoadMetrics()
 
   enum ServerState: Equatable {
     case idle
@@ -656,6 +657,8 @@ class LlamaServer {
 
   /// Terminates the currently running llama-server process and resets state
   func stop() {
+    loadMetrics.finish(succeeded: false, processID: activeProcess?.processIdentifier)
+
     // Set to .idle before terminating so the handler knows this is intentional
     state = .idle
 
@@ -818,6 +821,7 @@ class LlamaServer {
     // Optimistically set status to loading for immediate UI feedback. This also
     // makes the model the derived `activeModelId`. Polling updates to .loaded
     // once the server confirms.
+    loadMetrics.begin(model: model, processID: activeProcess?.processIdentifier)
     modelStatuses[model.id] = .loading
 
     Task {
@@ -876,16 +880,52 @@ class LlamaServer {
   private func checkStatus() async {
     guard let newStatuses = await api.fetchModelStatuses() else { return }
 
-    // Don't unload sleeping models — they're suspended in memory and can wake
-    // instantly. Unloading forces a full reload from disk next time (slow).
-    // Just update the UI to reflect the sleeping state.
     await MainActor.run {
+      let oldStatuses = self.modelStatuses
+      self.recordLoadMetrics(oldStatuses: oldStatuses, newStatuses: newStatuses)
+
+      // Don't unload sleeping models — they're suspended in memory and can wake
+      // instantly. Unloading forces a full reload from disk next time (slow).
+      // Just update the UI to reflect the sleeping state.
       if self.state == .loading {
         self.state = .running
       }
       if self.modelStatuses != newStatuses {
         self.modelStatuses = newStatuses
       }
+    }
+  }
+
+  private func recordLoadMetrics(
+    oldStatuses: [String: ModelLoadState], newStatuses: [String: ModelLoadState]
+  ) {
+    let processID = activeProcess?.processIdentifier
+
+    if let loadingID = newStatuses.first(where: { $0.value == .loading })?.key,
+      let model = ModelManager.shared.downloadedModels.first(where: { $0.id == loadingID })
+    {
+      if loadMetrics.activeModelId != nil, loadMetrics.activeModelId != loadingID {
+        loadMetrics.finish(succeeded: false, processID: processID)
+      }
+      loadMetrics.begin(model: model, processID: processID)
+    }
+
+    if newStatuses.values.contains(.loading) {
+      loadMetrics.sample(processID: processID)
+    }
+
+    if let finishedID = newStatuses.first(where: {
+      ($0.value == .loaded || $0.value == .sleeping) && oldStatuses[$0.key] == .loading
+    })?.key {
+      loadMetrics.finish(succeeded: true, processID: processID)
+      logger.info("Model load metrics finalized for \(finishedID, privacy: .public)")
+    } else if oldStatuses.values.contains(.loading),
+      !newStatuses.values.contains(.loading),
+      !newStatuses.values.contains(.loaded),
+      !newStatuses.values.contains(.sleeping)
+    {
+      loadMetrics.finish(succeeded: false, processID: processID)
+      logger.info("Model load metrics finalized as failed")
     }
   }
 }
