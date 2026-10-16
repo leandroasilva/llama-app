@@ -185,6 +185,73 @@ enum HFCache {
 
   // MARK: - File Operations
 
+  /// Returns the regular-file bytes in a cache tree. Symlinks are deliberately
+  /// excluded: HF snapshots point into `blobs/`, so counting both would report
+  /// the same model twice.
+  static func directorySize(at directory: URL) -> Int64 {
+    guard let enumerator = FileManager.default.enumerator(
+      at: directory,
+      includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+      options: [.skipsHiddenFiles]
+    ) else { return 0 }
+
+    var total: Int64 = 0
+    for case let fileURL as URL in enumerator {
+      guard
+        let values = try? fileURL.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+        values.isRegularFile == true
+      else { continue }
+      total += Int64(values.fileSize ?? 0)
+    }
+    return total
+  }
+
+  /// Merges one HF cache into another without replacing existing files. Blob
+  /// names are content hashes, so an existing file with the same size is safe to
+  /// reuse; conflicting files fail instead of silently overwriting user data.
+  /// Symlinks are copied as links, preserving HF's snapshot layout.
+  static func mergeDirectory(from source: URL, into destination: URL) throws {
+    let fileManager = FileManager.default
+    try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+
+    guard let entries = fileManager.enumerator(
+      at: source,
+      includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey],
+      options: []
+    ) else {
+      throw HFCacheError(message: "Could not enumerate the source model cache")
+    }
+
+    for case let sourceURL as URL in entries {
+      let relativePath = sourceURL.path.replacingOccurrences(of: source.path + "/", with: "")
+      let destinationURL = destination.appendingPathComponent(relativePath)
+      let sourceAttributes = try fileManager.attributesOfItem(atPath: sourceURL.path)
+      let sourceType = sourceAttributes[.type] as? FileAttributeType
+
+      if sourceType == .typeDirectory {
+        try fileManager.createDirectory(at: destinationURL, withIntermediateDirectories: true)
+        continue
+      }
+
+      if fileManager.fileExists(atPath: destinationURL.path) {
+        let destinationAttributes = try fileManager.attributesOfItem(atPath: destinationURL.path)
+        let destinationType = destinationAttributes[.type] as? FileAttributeType
+        if sourceType == .typeSymbolicLink && destinationType == .typeSymbolicLink {
+          continue
+        }
+        guard destinationAttributes[.size] as? Int64 == sourceAttributes[.size] as? Int64 else {
+          throw HFCacheError(
+            message: "Conflicting file in the internal cache: \(relativePath)")
+        }
+        continue
+      }
+
+      try fileManager.createDirectory(
+        at: destinationURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+      try fileManager.copyItem(at: sourceURL, to: destinationURL)
+    }
+  }
+
   /// Writes a downloaded file into the HF cache layout.
   ///
   /// 1. Creates directory structure (blobs/, snapshots/{commit}/, refs/)

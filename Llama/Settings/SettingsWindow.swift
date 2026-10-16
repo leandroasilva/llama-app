@@ -456,6 +456,8 @@ struct SettingsView: View {
   @State private var sleepIdleTime = UserSettings.sleepIdleTime
   @State private var agentMode = UserSettings.agentMode
   @State private var hfCacheDir = UserSettings.hfCacheDirectory
+  @State private var isMigratingCache = false
+  @State private var cacheMigrationMessage: String?
   @State private var globalShortcut = UserSettings.globalInputShortcut
   @State private var customWebUIDir = UserSettings.customWebUIDirectory
   @State private var hfToken = UserSettings.hfToken ?? ""
@@ -729,12 +731,24 @@ struct SettingsView: View {
             .font(.callout)
 
             if StorageHealth.location(of: hfCacheDir) == .externalVolume {
-              Button("Use a faster location") {
-                chooseCacheFolder()
+              if isMigratingCache {
+                Text("Copying models to the internal cache...")
+              } else {
+                Button("Move to internal cache") {
+                  migrateCacheToInternal()
+                }
+                .buttonStyle(.link)
+                .font(.caption)
+                .foregroundStyle(.secondary)
               }
-              .buttonStyle(.link)
-              .font(.caption)
-              .foregroundStyle(.secondary)
+            }
+
+            if let cacheMigrationMessage {
+              Text(cacheMigrationMessage)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.trailing)
+                .fixedSize(horizontal: false, vertical: true)
             }
           }
         }
@@ -1249,6 +1263,48 @@ struct SettingsView: View {
       // differ in trailing slash / symlink resolution)
       hfCacheDir = UserSettings.hfCacheDirectory
       ModelManager.shared.refreshDownloadedModels()
+    }
+  }
+
+  /// Copies the current external HF cache into the default internal cache and
+  /// switches the app only after the merge succeeds. The source remains intact
+  /// so the user has a recovery copy and other HF tools keep working.
+  private func migrateCacheToInternal() {
+    let source = UserSettings.hfCacheDirectory
+    let destination = UserSettings.defaultHFCacheDirectory
+    guard source != destination, !isMigratingCache else { return }
+
+    let requiredBytes = HFCache.directorySize(at: source)
+    let availableBytes = DiskSpace.availableBytes(
+      at: FileManager.default.homeDirectoryForCurrentUser)
+    let safetyMargin: Int64 = 1_073_741_824
+    guard requiredBytes > 0, availableBytes > requiredBytes + safetyMargin else {
+      cacheMigrationMessage = "Not enough free space on the internal disk."
+      return
+    }
+
+    isMigratingCache = true
+    cacheMigrationMessage = nil
+    LlamaServer.shared.stop()
+
+    Task.detached {
+      do {
+        try HFCache.mergeDirectory(from: source, into: destination)
+        await MainActor.run {
+          UserSettings.hfCacheDirectory = destination
+          hfCacheDir = destination
+          isMigratingCache = false
+          cacheMigrationMessage = "Copied to the internal cache. The external copy was kept."
+          ModelManager.shared.scanNow()
+          LlamaServer.shared.start()
+        }
+      } catch {
+        await MainActor.run {
+          isMigratingCache = false
+          cacheMigrationMessage = "Migration failed: \(error.localizedDescription)"
+          LlamaServer.shared.start()
+        }
+      }
     }
   }
 
