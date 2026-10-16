@@ -701,31 +701,42 @@ struct SettingsView: View {
           title: "Model directory",
           description: "Where downloaded models are stored."
         ) {
-          HStack(spacing: 6) {
-            // Only offer a reset when a custom directory is set.
-            if UserSettings.hasCustomHFCacheDirectory {
-              RestoreDefaultButton {
-                UserSettings.hfCacheDirectory = UserSettings.defaultHFCacheDirectory
-                hfCacheDir = UserSettings.hfCacheDirectory
-                ModelManager.shared.refreshDownloadedModels()
+          VStack(alignment: .trailing, spacing: 4) {
+            HStack(spacing: 6) {
+              // Only offer a reset when a custom directory is set.
+              if UserSettings.hasCustomHFCacheDirectory {
+                RestoreDefaultButton {
+                  UserSettings.hfCacheDirectory = UserSettings.defaultHFCacheDirectory
+                  hfCacheDir = UserSettings.hfCacheDirectory
+                  ModelManager.shared.refreshDownloadedModels()
+                }
               }
-            }
 
-            // One button opens the picker; it shows the current path (already
-            // middle-truncated by `abbreviatedPath`) next to a folder icon.
-            Button {
-              chooseCacheFolder()
-            } label: {
-              HStack(spacing: 6) {
-                Text(abbreviatedPath(hfCacheDir))
-                  .lineLimit(1)
+              // One button opens the picker; it shows the current path (already
+              // middle-truncated by `abbreviatedPath`) next to a folder icon.
+              Button {
+                chooseCacheFolder()
+              } label: {
+                HStack(spacing: 6) {
+                  Text(abbreviatedPath(hfCacheDir))
+                    .lineLimit(1)
 
-                Image(systemName: "folder")
+                  Image(systemName: "folder")
+                }
               }
+              .controlSize(.small)
             }
-            .controlSize(.small)
+            .font(.callout)
+
+            if StorageHealth.location(of: hfCacheDir) == .externalVolume {
+              Button("Use a faster location") {
+                chooseCacheFolder()
+              }
+              .buttonStyle(.link)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+            }
           }
-          .font(.callout)
         }
 
         SettingRow(

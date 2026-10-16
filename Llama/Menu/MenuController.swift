@@ -309,6 +309,8 @@ final class MenuController: NSObject, NSMenuDelegate {
       && !FileManager.default.fileExists(atPath: UserSettings.hfCacheDirectory.path)
     {
       addFolderWarning(to: menu)
+    } else if StorageHealth.location(of: UserSettings.hfCacheDirectory) == .externalVolume {
+      addExternalStorageWarning(to: menu)
     }
 
     // `managed` was snapshotted above (needed there to resolve the page model);
@@ -851,6 +853,21 @@ final class MenuController: NSObject, NSMenuDelegate {
       style: .description,
       // Straight to the tab with the setting -- Advanced isn't where someone
       // would look for it first.
+      onAction: { [weak self] in
+        self?.openSettings(tab: .advanced)
+      }
+    )
+    menu.addItem(NSMenuItem.viewItem(with: warningView))
+    menu.addItem(NSMenuItem.viewItem(with: SeparatorView()))
+  }
+
+  private func addExternalStorageWarning(to menu: NSMenu) {
+    let volume = StorageHealth.volumeName(of: UserSettings.hfCacheDirectory)
+    let label = volume.map { "Model directory is on external storage (\($0))." }
+      ?? "Model directory is on external storage."
+    let warningView = TextItemView(
+      text: "\(label) Loading may be slower. Check Settings.",
+      style: .description,
       onAction: { [weak self] in
         self?.openSettings(tab: .advanced)
       }
