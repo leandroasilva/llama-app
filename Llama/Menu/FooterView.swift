@@ -115,10 +115,14 @@ final class FooterView: ItemView {
   }
 
   private func refreshVersionLabel() {
+    let color = updateVersion == nil ? Theme.Colors.textPrimary : NSColor.controlAccentColor
     versionLabel.attributedStringValue = NSAttributedString(
       string: appVersionText,
-      attributes: Theme.secondaryAttributes(color: Theme.Colors.textPrimary)
+      attributes: Theme.secondaryAttributes(color: color)
     )
+    versionLabel.toolTip = updateVersion.map {
+      "New version \($0) available. Click to check for updates."
+    } ?? "Click to check for updates"
   }
 
   private var appVersionText: String {

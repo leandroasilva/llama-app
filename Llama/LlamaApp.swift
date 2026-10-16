@@ -25,7 +25,11 @@ struct LlamaApp: App {
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
+  /// Background checks are silent; a found update is surfaced in the menu footer.
+  private static let automaticUpdateCheckInterval: UInt64 = 4 * 60 * 60 * 1_000_000_000
+
   private var updaterController: SPUStandardUpdaterController?
+  private var automaticUpdateCheckTask: Task<Void, Never>?
   private let logger = Logger(subsystem: Logging.subsystem, category: "AppDelegate")
   private var menuController: MenuController?
   private var networkExposureGuard: NetworkExposureGuard?
@@ -158,6 +162,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     menuController = MenuController(checkForUpdates: { [weak self] in
       self?.updaterController?.checkForUpdates(nil)
     })
+    startAutomaticUpdateChecks(enabled: startUpdater)
 
     // Scope network access to the network it was granted on, so the setting
     // doesn't follow the laptop onto someone else's wifi.
@@ -186,8 +191,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   func applicationWillTerminate(_ notification: Notification) {
     logger.info("Llama shutting down")
 
+    automaticUpdateCheckTask?.cancel()
+    automaticUpdateCheckTask = nil
+
     // Gracefully stop the llama-server process when app quits
     LlamaServer.shared.stop()
+  }
+
+  private func startAutomaticUpdateChecks(enabled: Bool) {
+    automaticUpdateCheckTask?.cancel()
+    guard enabled else { return }
+
+    automaticUpdateCheckTask = Task { @MainActor [weak self] in
+      while !Task.isCancelled {
+        try? await Task.sleep(nanoseconds: Self.automaticUpdateCheckInterval)
+        guard !Task.isCancelled, let self else { return }
+        guard let updater = self.updaterController?.updater,
+          updater.canCheckForUpdates, !updater.sessionInProgress
+        else { continue }
+
+        // Background checks do not interrupt the user. The delegate updates the
+        // footer and status-item badge when Sparkle finds a newer version.
+        updater.checkForUpdatesInBackground()
+      }
+    }
   }
 }
 
@@ -250,6 +277,24 @@ extension AppDelegate: SPUStandardUserDriverDelegate {
 // MARK: - SPUUpdaterDelegate
 
 extension AppDelegate: SPUUpdaterDelegate {
+  func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
+    MainActor.assumeIsolated {
+      menuController?.setUpdateAvailable(item.displayVersionString)
+    }
+  }
+
+  func updaterDidNotFindUpdate(_ updater: SPUUpdater) {
+    MainActor.assumeIsolated {
+      menuController?.setUpdateAvailable(nil)
+    }
+  }
+
+  func updaterDidNotFindUpdate(_ updater: SPUUpdater, error: Error) {
+    MainActor.assumeIsolated {
+      menuController?.setUpdateAvailable(nil)
+    }
+  }
+
   func updater(_ updater: SPUUpdater, didFailToCheckForUpdatesWithError error: Error) {
     logger.error(
       "Sparkle: failed to check for updates: \(error.localizedDescription, privacy: .public)")
