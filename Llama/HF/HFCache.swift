@@ -222,8 +222,15 @@ enum HFCache {
       throw HFCacheError(message: "Could not enumerate the source model cache")
     }
 
+    let sourceRoot = source.standardizedFileURL.path
+    let sourcePrefix = sourceRoot.hasSuffix("/") ? sourceRoot : sourceRoot + "/"
+
     for case let sourceURL as URL in entries {
-      let relativePath = sourceURL.path.replacingOccurrences(of: source.path + "/", with: "")
+      let normalizedSourcePath = sourceURL.standardizedFileURL.path
+      guard normalizedSourcePath.hasPrefix(sourcePrefix) else {
+        throw HFCacheError(message: "Could not resolve a cache entry path")
+      }
+      let relativePath = String(normalizedSourcePath.dropFirst(sourcePrefix.count))
       let destinationURL = destination.appendingPathComponent(relativePath)
       let sourceAttributes = try fileManager.attributesOfItem(atPath: sourceURL.path)
       let sourceType = sourceAttributes[.type] as? FileAttributeType
