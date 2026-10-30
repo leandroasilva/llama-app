@@ -132,10 +132,7 @@ fn metal_config_fixture() {
 fn artifact_urls_fixture() {
     let f: EngineFixture = load("engine.json");
     for c in &f.artifact_urls {
-        assert_eq!(
-            artifact_url(&c.version),
-            c.url
-        );
+        assert_eq!(artifact_url(&c.version), c.url);
     }
     for c in &f.unzstd_urls {
         assert_eq!(unzstd_url(&c.version), c.url);

@@ -641,10 +641,8 @@ fn fase4_engine() {
     .unwrap();
     assert_eq!(out["path"], "/Users/fixture/.llama-app/llama");
 
-    let release: serde_json::Value = serde_json::from_str(
-        &call("engine.targetRelease", "{}").unwrap(),
-    )
-    .unwrap();
+    let release: serde_json::Value =
+        serde_json::from_str(&call("engine.targetRelease", "{}").unwrap()).unwrap();
     assert_eq!(release["version"], "b12005");
     assert_eq!(release["channel"], "preview");
     assert_eq!(release["sha256"].as_str().unwrap().len(), 64);
@@ -661,11 +659,7 @@ fn fase4_engine() {
 
     // Artifact URLs.
     assert_eq!(
-        call(
-            "engine.artifactUrl",
-            r#"{"version":"b12005"}"#
-        )
-        .unwrap(),
+        call("engine.artifactUrl", r#"{"version":"b12005"}"#).unwrap(),
         r#"{"url":"https://github.com/ggml-org/llama.cpp/releases/download/b12005/llama-b12005-bin-macos-arm64.tar.gz"}"#
     );
     assert_eq!(
