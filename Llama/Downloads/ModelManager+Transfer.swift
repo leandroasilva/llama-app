@@ -295,6 +295,7 @@ extension ModelManager {
           self.downloadedModels.sort(by: Model.displayOrder(_:_:))
         }
         self.refreshDownloadedModels()
+        self.startNextQueuedDownloads()
         // Let the menu bar flag the finished download on its icon, in case the
         // user walked away during a long download and isn't watching the menu.
         NotificationCenter.default.post(name: .LBModelDownloadDidComplete, object: nil)

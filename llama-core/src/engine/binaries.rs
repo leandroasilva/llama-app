@@ -76,8 +76,20 @@ pub fn is_homebrew(path: &str) -> bool {
 
 /// The version constants of the engine policy. Pinned per app release; see the
 /// Swift original for the floor/multi-host rationale.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetRelease {
+    pub version: String,
+    pub sha256: String,
+    pub channel: String,
+}
+
+pub fn target_release() -> TargetRelease {
+    serde_json::from_str(include_str!("release.json")).expect("valid engine release manifest")
+}
+
 pub fn target_version() -> LlamaVersion {
-    LlamaVersion { build: 12005 }
+    LlamaVersion::parse(&target_release().version).expect("release manifest has a version")
 }
 pub fn floor_version() -> LlamaVersion {
     LlamaVersion { build: 9831 }

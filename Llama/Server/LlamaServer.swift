@@ -177,6 +177,12 @@ class LlamaServer {
   private let logger = Logger(subsystem: Logging.subsystem, category: "LlamaServer")
   private let api = LlamaServerAPI()
   private let loadMetrics = ModelLoadMetrics()
+  private(set) var runtimeMetrics: ServerRuntimeMetrics? {
+    didSet {
+      guard runtimeMetrics != oldValue else { return }
+      NotificationCenter.default.post(name: .LBServerMetricsDidChange, object: self)
+    }
+  }
 
   enum ServerState: Equatable {
     case idle
@@ -197,6 +203,14 @@ class LlamaServer {
   var activeModelId: String? {
     modelStatuses.first { $0.value == .loaded || $0.value == .loading }?.key
   }
+  var runtimeModelId: String? {
+    modelStatuses.first {
+      $0.value == .loaded || $0.value == .loading || $0.value == .sleeping
+    }?.key
+  }
+  var currentResidentBytes: UInt64 { loadMetrics.currentResidentBytes }
+  var currentPhysicalFootprintBytes: UInt64 { loadMetrics.currentPhysicalFootprintBytes }
+  var mostRecentLoadMetric: ModelLoadMetric? { loadMetrics.mostRecentLoad }
   // Store observer token for proper cleanup
   private var settingsObserver: NSObjectProtocol?
   /// The launch spec of the currently running server, so settings changes can
@@ -743,6 +757,8 @@ class LlamaServer {
     stopActiveProcess()
     cleanUpPipes()
     stopStatusPolling()
+    runtimeMetrics = nil
+    loadMetrics.sample(processID: nil)
   }
 
   /// Gracefully terminates the currently running process. Main-actor path used
@@ -856,15 +872,16 @@ class LlamaServer {
     stopStatusPolling()
 
     healthCheckTask = Task {
-      // Poll /models to detect status. Adaptive interval: fast (1s) during active
-      // transitions (loading/unloading), slow (15s) when idle to save CPU/battery.
+      // Poll status and Prometheus metrics. Active models stay on a 1s cadence;
+      // idle servers slow to 15s to save CPU and battery.
       while !Task.isCancelled {
         await checkStatus()
 
-        // Determine poll interval based on current state.
+        // Keep runtime throughput responsive while a model is resident.
         let hasLoadingModel = modelStatuses.values.contains { $0 == .loading }
-        let intervalNanos: UInt64 = (state == .loading || hasLoadingModel)
-          ? 1_000_000_000      // 1 second during active transitions
+        let hasLoadedModel = modelStatuses.values.contains { $0 == .loaded }
+        let intervalNanos: UInt64 = (state == .loading || hasLoadingModel || hasLoadedModel)
+          ? 1_000_000_000      // 1 second while loading or serving
           : 15_000_000_000     // 15 seconds when idle/stable
 
         try? await Task.sleep(nanoseconds: intervalNanos)
@@ -879,10 +896,26 @@ class LlamaServer {
 
   private func checkStatus() async {
     guard let newStatuses = await api.fetchModelStatuses() else { return }
+    let metricsModelId = newStatuses.first(where: {
+      $0.value == .loaded || $0.value == .loading || $0.value == .sleeping
+    })?.key
+    let freshMetrics: ServerRuntimeMetrics?
+    if let metricsModelId {
+      freshMetrics = await api.fetchRuntimeMetrics(modelId: metricsModelId)
+    } else {
+      freshMetrics = nil
+    }
 
     await MainActor.run {
       let oldStatuses = self.modelStatuses
+      let oldFootprint = self.currentPhysicalFootprintBytes
       self.recordLoadMetrics(oldStatuses: oldStatuses, newStatuses: newStatuses)
+      self.loadMetrics.sample(processID: self.activeProcess?.processIdentifier)
+      if self.runtimeMetrics != freshMetrics {
+        self.runtimeMetrics = freshMetrics
+      } else if oldFootprint != self.currentPhysicalFootprintBytes {
+        NotificationCenter.default.post(name: .LBServerMetricsDidChange, object: self)
+      }
 
       // Don't unload sleeping models — they're suspended in memory and can wake
       // instantly. Unloading forces a full reload from disk next time (slow).

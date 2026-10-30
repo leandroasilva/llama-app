@@ -282,7 +282,8 @@
           "--sleep-idle-seconds",
           "300",
           "--jinja",
-          "--spec-default"
+          "--spec-default",
+          "--metrics"
         ],
         "extraArgCount": 0,
         "env": [
@@ -330,6 +331,7 @@
           "127.0.0.1,100.64.0.1",
           "--jinja",
           "--spec-default",
+          "--metrics",
           "--agent",
           "--ctx-size",
           "8192"

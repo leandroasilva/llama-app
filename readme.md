@@ -32,6 +32,8 @@ When a model is installed, Llama runs a two-point memory probe to build a linear
 
 The llama.cpp server process runs continuously. When you switch models, the new one is loaded in-place without restarting the server. The model list is reloaded from disk automatically when you install or delete models, so there's no manual refresh needed.
 
+When a model is loaded, the menu shows its live process footprint and llama.cpp's prompt/generation throughput. During generation, the menu-bar item also shows tokens per second. When idle, the menu shows the most recent model-load duration and peak memory. These are local aggregate metrics; prompts and completions are not recorded.
+
 ### Global input with system-wide hotkey
 
 Configure a keyboard shortcut in Settings to summon a Spotlight-style prompt from anywhere on your system. Type a question without switching apps, pick a model with `Cmd+K`, and the prompt is dispatched to the WebUI. The panel targets your last-used model by default.
@@ -48,6 +50,8 @@ The app monitors network path changes and withdraws access consent when you join
 ### Standard Hugging Face cache
 
 Models are stored in `~/.cache/huggingface/hub`, the same directory used by llama.cpp, text-generation-webui, and other HF-aware tools. Install a model once and every tool sees it. The cache directory is configurable in Settings.
+
+Model downloads use a FIFO queue with one model download active at a time. Queued jobs survive app restarts; interrupted transfers reappear as paused and resume from their partial files when you select them.
 
 ### Custom model settings
 
@@ -119,6 +123,10 @@ curl http://localhost:9931/v1/chat/completions \
 
 All llama.cpp server endpoints are available. See the [llama.cpp server docs](https://github.com/ggml-org/llama.cpp/tree/master/tools/server#api-endpoints) for the full reference.
 
+### Coding agents
+
+Open **Settings → Agents** to choose an installed model and copy connection settings for OpenCode or Codex CLI. OpenCode uses the OpenAI-compatible Chat Completions endpoint; Codex uses llama.cpp's Responses endpoint. When network access is enabled, the generated configuration references `LLAMA_API_KEY` from the environment instead of copying the secret.
+
 ## Advanced configuration
 
 **Custom bind address:**
@@ -143,10 +151,12 @@ defaults delete app.llama.Llama extraServerArgs   # reset
 
 ## Architecture
 
-The app is split into two layers:
+The app has two main layers plus an engine-adapter contract:
 
 - **`llama-core`** (Rust) — pure logic: model ID parsing, GGUF metadata reading, HF cache management, download engine, memory profiling, server launch spec construction, INI config, event system. No platform dependencies.
-- **`Llama/`** (Swift) — macOS UI and system integration: AppKit menu bar, SwiftUI settings, global hotkey via Carbon, launch-at-login via ServiceManagement, Sparkle updates, Sentry crash reporting, deeplinks, process management.
+- **`Llama/`** (Swift) — macOS UI and system integration: AppKit menu bar, SwiftUI settings, global hotkey via Carbon, launch-at-login via ServiceManagement, Sparkle updates, Sentry crash reporting, deeplinks, process management, and the runtime/installer contracts in `Llama/Engine/InferenceEngineRuntime.swift`.
+
+The managed engine's version, channel, and release-artifact digest come from one manifest: `llama-core/src/engine/release.json`.
 
 The two layers communicate through a JSON-over-C-ABI FFI bridge (`llama-core-ffi`). Swift calls a single `llama_core_call(method, args_json)` function; Rust dispatches to the appropriate handler and returns a JSON result.
 

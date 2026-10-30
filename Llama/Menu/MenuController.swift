@@ -69,7 +69,7 @@ final class MenuController: NSObject, NSMenuDelegate {
   /// The (badge, dim) pair last applied to the status button, so the frequent
   /// `refresh()` calls during a download don't rebuild an identical icon image
   /// on every progress tick.
-  private var appliedIcon: (symbol: String?, dim: CGFloat)?
+  private var appliedIcon: (symbol: String?, dim: CGFloat, speed: String?)?
 
   // Store observer tokens for proper cleanup
   private var observers: [NSObjectProtocol] = []
@@ -166,7 +166,9 @@ final class MenuController: NSObject, NSMenuDelegate {
   /// comparison, so it queues behind those transient signals and reappears once
   /// they clear.
   private var statusBadgeSymbol: String? {
-    if !modelManager.downloadingModels.isEmpty { return "arrow.down" }
+    if !modelManager.downloadingModels.isEmpty || !modelManager.queuedDownloads.isEmpty {
+      return "arrow.down"
+    }
     if hasUnseenCompletion { return "checkmark" }
     if updateAvailable != nil { return "sparkles" }
     return nil
@@ -180,8 +182,12 @@ final class MenuController: NSObject, NSMenuDelegate {
     guard let button = statusItem.button else { return }
     let symbol = statusBadgeSymbol
     let dim = statusIconDimAlpha
-    guard appliedIcon == nil || appliedIcon! != (symbol, dim) else { return }
-    appliedIcon = (symbol, dim)
+    let speed = server.runtimeMetrics.flatMap { metrics -> String? in
+      guard metrics.requestsProcessing > 0 else { return nil }
+      return "\(Int(metrics.generationTokensPerSecond.rounded()))"
+    }
+    guard appliedIcon == nil || appliedIcon! != (symbol, dim, speed) else { return }
+    appliedIcon = (symbol, dim, speed)
 
     let base =
       NSImage(named: "MenuIcon")
@@ -193,6 +199,9 @@ final class MenuController: NSObject, NSMenuDelegate {
       base?.isTemplate = true
       button.image = base
     }
+    button.title = speed ?? ""
+    button.font = .monospacedDigitSystemFont(ofSize: 10, weight: .medium)
+    button.toolTip = speed.map { "\($0) tokens/s" } ?? "Llama local inference"
     button.alphaValue = dim
   }
 
@@ -287,6 +296,10 @@ final class MenuController: NSObject, NSMenuDelegate {
       let view = HeaderView(server: server)
       menu.addItem(NSMenuItem.viewItem(with: view))
       menu.addItem(NSMenuItem.viewItem(with: SeparatorView()))
+      if server.runtimeModelId != nil {
+        menu.addItem(NSMenuItem.viewItem(with: RuntimeMetricsView(server: server)))
+        menu.addItem(NSMenuItem.viewItem(with: SeparatorView()))
+      }
     }
 
     // Surface the app-owned CLI install (setting up… / failed + retry) above
@@ -416,15 +429,14 @@ final class MenuController: NSObject, NSMenuDelegate {
     observe(.LBCLIInstallStateDidChange, rebuildMenu: true)
 
     // Models load/unload inside the running server, without changing its state.
-    // Rebuild an open model page so its Unload row follows those transitions;
-    // refreshing existing views alone cannot add or remove the action.
+    // Rebuild so the runtime card and model-page actions follow those transitions.
     observe(.LBModelStatusDidChange) { [weak self] _ in
       guard let self else { return }
-      if self.selectedModelId != nil {
-        self.rebuildMenuIfPossible()
-      }
+      self.rebuildMenuIfPossible()
       self.refresh()
     }
+
+    observe(.LBServerMetricsDidChange) { [weak self] _ in self?.refresh() }
 
     // Download state changed. A plain progress tick only refreshes existing
     // rows; a membership change (download started/stopped — e.g. from Discover)
@@ -504,6 +516,8 @@ final class MenuController: NSObject, NSMenuDelegate {
       } else if let view = item.view as? ModelItemView {
         view.refresh()
       } else if let view = item.view as? ModelPageHeaderView {
+        view.refresh()
+      } else if let view = item.view as? RuntimeMetricsView {
         view.refresh()
       } else if let view = item.view as? FooterView {
         view.setUpdateVersion(updateAvailable)
@@ -610,7 +624,7 @@ final class MenuController: NSObject, NSMenuDelegate {
   private func isLiveRow(_ model: Model) -> Bool {
     if server.isActive(model: model) || server.isLoading(model: model) { return true }
     switch modelManager.status(for: model) {
-    case .downloading, .paused: return true
+    case .queued, .downloading, .paused: return true
     case .available, .installed: return false
     }
   }

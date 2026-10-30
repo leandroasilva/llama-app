@@ -87,10 +87,10 @@ final class ModelItemView: ItemView, NSGestureRecognizerDelegate {
   /// cancelled transition and to gate the hover-only cancel X in `highlightDidChange`.
   private var showAsDownloading = false
 
-  /// Which of the pause/play pair is currently drawn, so `refresh()` can skip
-  /// rebuilding the symbol on every progress tick. Starts matching the `pause`
-  /// set up in `init`.
+  /// Current download-row glyph state. The queued clock, active pause, and
+  /// paused play glyph are rebuilt only when the state changes.
   private var showsPausedGlyph = false
+  private var showsQueuedGlyph = false
 
   /// Tint for the pause/play glyph. A live download takes the accent color: it's
   /// the one row in the list whose state is changing, and otherwise everything
@@ -100,7 +100,7 @@ final class ModelItemView: ItemView, NSGestureRecognizerDelegate {
   /// doesn't move again when it finishes). Paused drops back to tertiary like
   /// the chevrons: nothing is happening, so there's nothing to draw the eye to.
   private var pausePlayTint: NSColor {
-    showsPausedGlyph ? .tertiaryLabelColor : .controlAccentColor
+    (showsPausedGlyph || showsQueuedGlyph) ? .tertiaryLabelColor : .controlAccentColor
   }
 
   init(
@@ -285,12 +285,17 @@ final class ModelItemView: ItemView, NSGestureRecognizerDelegate {
     // styling; only the label text and the pause/play icon differ.
     var isDownloading = false
     var isPaused = false
+    var isQueued = false
     var isInstalled = false
     var fraction: Double?
     var downloadedBytes: Int64 = 0
+    var queuePosition = 0
     switch status {
     case .available:
       break
+    case .queued(let position):
+      isQueued = true
+      queuePosition = position
     case .downloading(let progress):
       isDownloading = true
       downloadedBytes = progress.completedUnitCount
@@ -311,7 +316,7 @@ final class ModelItemView: ItemView, NSGestureRecognizerDelegate {
     let wasDownloading = showAsDownloading
     let isCancelled = wasDownloading && !isDownloading && !isPaused && !isInstalled
 
-    showAsDownloading = isDownloading || isPaused || isCancelled
+    showAsDownloading = isDownloading || isPaused || isQueued || isCancelled
 
     // Only incompatible models dim the title; download state doesn't affect it.
     let isCompatible = model.isCompatible()
@@ -333,7 +338,11 @@ final class ModelItemView: ItemView, NSGestureRecognizerDelegate {
     // transfer readout while a download is in flight: "1.2 GB of 3.1 GB", plus
     // " · Paused" when interrupted.
     // Ctx tier is only meaningful once fully downloaded, so it's omitted here.
-    if showAsDownloading {
+    if isQueued {
+      subtitleLabel.attributedStringValue = NSAttributedString(
+        string: "Queued · #\(queuePosition) · click to remove",
+        attributes: Theme.secondaryAttributes(color: Theme.Colors.textSecondary))
+    } else if showAsDownloading {
       subtitleLabel.attributedStringValue = Format.downloadSubtitle(
         downloadedBytes: downloadedBytes,
         totalBytes: model.fileSize,
@@ -357,10 +366,13 @@ final class ModelItemView: ItemView, NSGestureRecognizerDelegate {
     // on the row would do next. Only the symbol, its tooltip and its tint vary;
     // size stays with the one `Theme.configure` in `init`. Guarded because `refresh()` runs on every progress tick and this
     // changes at most twice a download.
-    if showsPausedGlyph != isPaused {
+    if showsPausedGlyph != isPaused || showsQueuedGlyph != isQueued {
       showsPausedGlyph = isPaused
-      pausePlayImageView.image = Theme.symbolImage(isPaused ? "play.circle" : "pause.circle")
-      pausePlayImageView.toolTip = isPaused ? "Resume download" : "Pause download"
+      showsQueuedGlyph = isQueued
+      let symbol = isQueued ? "clock" : isPaused ? "play.circle" : "pause.circle"
+      pausePlayImageView.image = Theme.symbolImage(symbol)
+      pausePlayImageView.toolTip = isQueued
+        ? "Queued · click to remove" : isPaused ? "Resume download" : "Pause download"
       pausePlayImageView.contentTintColor = pausePlayTint
     }
 

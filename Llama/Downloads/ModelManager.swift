@@ -6,6 +6,7 @@ import os.log
 /// Represents the current status of a model
 enum ModelStatus: Equatable {
   case available
+  case queued(position: Int)
   case downloading(Progress)
   /// A `.partial` file exists on disk but no transfer is active.
   /// `bytesOnDisk` is the sum of the model's `.partial` file sizes;
@@ -32,7 +33,7 @@ class ModelManager: NSObject, URLSessionDataDelegate {
   /// the menu.
   var managedModels: [Model] {
     (downloadedModels + downloadingModels + pausedModels)
-      .sorted(by: Model.displayOrder(_:_:))
+      .sorted(by: Model.displayOrder(_:_:)) + queuedDownloads.map(\.model)
   }
 
   var downloadingModels: [Model] {
@@ -43,7 +44,9 @@ class ModelManager: NSObject, URLSessionDataDelegate {
   /// `apply(_:)` excludes ids that are installed or actively downloading at
   /// refresh time.
   var pausedModels: [Model] {
-    pausedDownloads.values.map(\.model)
+    pausedDownloads.values.map(\.model).filter { model in
+      !queuedDownloads.contains(where: { $0.model.id == model.id })
+    }
   }
 
   var activeDownloads: [String: ActiveDownload] = [:]
@@ -57,6 +60,11 @@ class ModelManager: NSObject, URLSessionDataDelegate {
   /// download writes (see `persistPlaceholder` / `HFCache.scanPlaceholders`), so
   /// an interrupted download reappears as a paused row rather than vanishing.
   var pausedDownloads: [String: PausedDownload] = [:]
+
+  /// Stable FIFO queue, persisted next to app settings. One model transfer runs
+  /// at a time to keep disk/network pressure predictable on a local machine.
+  private(set) var queuedDownloads: [QueuedModelDownload] = []
+  private let maxConcurrentModelDownloads = 1
 
   /// Per-task streaming state for in-flight downloads, keyed by
   /// `URLSessionTask.taskIdentifier`. Accessed from both the URLSession delegate
@@ -89,6 +97,7 @@ class ModelManager: NSObject, URLSessionDataDelegate {
 
   override init() {
     super.init()
+    queuedDownloads = Self.loadQueuedDownloads()
 
     // URLSession delegate callbacks run on a background queue to avoid blocking the main thread
     // during file operations. The callbacks are self-contained — each writer carries the context
@@ -136,36 +145,84 @@ class ModelManager: NSObject, URLSessionDataDelegate {
       do {
         try downloadModel(paused.model)
       } catch {
-        // downloadModel consumed the paused entry (flag included) before
-        // throwing, so the model won't retry until the user resumes it by hand.
+        // Validation may fail before the paused entry is consumed, so clear its
+        // reconnect flag to avoid a retry loop on the next network transition.
+        pausedDownloads[paused.model.id]?.resumeOnReconnect = false
         logger.error(
           "Auto-resume failed for \(paused.model.displayName): \(error.localizedDescription)")
       }
     }
+    startNextQueuedDownloads()
   }
 
   /// Downloads all required files for a model.
   /// Fetches HF metadata (commit hash, blob hashes) first, then starts URLSession tasks.
   func downloadModel(_ model: Model) throws {
-    // Prevent duplicate downloads if user clicks download multiple times or if called from multiple code paths.
-    // Without this check, we'd start redundant URLSession tasks, waste bandwidth, and corrupt download state.
-    if activeDownloads[model.id] != nil {
-      logger.info("Download already in progress for model: \(model.displayName)")
+    // Prevent duplicate active or queued work if a row/deeplink is triggered twice.
+    if activeDownloads[model.id] != nil || queuedDownloads.contains(where: { $0.model.id == model.id }) {
+      logger.info("Download already active or queued for model: \(model.displayName)")
       return
     }
 
-    // Transition paused → downloading. Bytes-on-disk are already in the `.partial`
-    // file, so no need to hold them in pausedDownloads once the transfer is live.
-    // We do keep the byte count around to pre-seed the placeholder Progress below —
-    // without it, the row flashes 0% while HF metadata is being fetched (before
-    // writers open and `refreshProgress` can re-derive the real figure).
-    // Consuming the entry also consumes its `resumeOnReconnect` flag — starting
-    // (or resuming) supersedes any connectivity-park state; if the download fails
-    // offline again the transient path parks it anew.
-    let resumedBytes = pausedDownloads.removeValue(forKey: model.id)?.bytesOnDisk ?? 0
-
     let filesToDownload = try prepareDownload(for: model)
     guard !filesToDownload.isEmpty else { return }
+
+    guard activeDownloads.count < maxConcurrentModelDownloads,
+      queuedDownloads.isEmpty,
+      isNetworkAvailable
+    else {
+      queuedDownloads.append(QueuedModelDownload(model: model, queuedAt: Date()))
+      persistQueuedDownloads()
+      logger.info("Queued download for model: \(model.displayName)")
+      postDownloadsDidChange()
+      NotificationCenter.default.post(name: .LBModelDownloadedListDidChange, object: self)
+      startNextQueuedDownloads()
+      return
+    }
+
+    startDownload(model, files: filesToDownload)
+  }
+
+  /// Starts the oldest queued model when a transfer slot is available. Called
+  /// after completion, pause, failure, and cache rehydration.
+  func startNextQueuedDownloads() {
+    guard isNetworkAvailable else { return }
+    while activeDownloads.count < maxConcurrentModelDownloads, !queuedDownloads.isEmpty {
+      let queued = queuedDownloads.removeFirst()
+
+      if downloadedModels.contains(where: { $0.id == queued.model.id }) {
+        persistQueuedDownloads()
+        continue
+      }
+      do {
+        let files = try prepareDownload(for: queued.model)
+        guard !files.isEmpty else {
+          persistQueuedDownloads()
+          continue
+        }
+        // Register the partial placeholder and active state before removing the
+        // durable queue entry. If the process exits mid-transition, either the
+        // queue or the resumable placeholder remains to recover the job.
+        startDownload(queued.model, files: files)
+        persistQueuedDownloads()
+      } catch {
+        persistQueuedDownloads()
+        logger.error(
+          "Could not start queued model \(queued.model.displayName): \(error.localizedDescription)")
+        NotificationCenter.default.post(
+          name: .LBModelDownloadDidFail,
+          object: self,
+          userInfo: ["model": queued.model, "error": error.localizedDescription])
+      }
+    }
+    postDownloadsDidChange()
+    NotificationCenter.default.post(name: .LBModelDownloadedListDidChange, object: self)
+  }
+
+  private func startDownload(_ model: Model, files filesToDownload: [URL]) {
+    // Preserve partial bytes for a resumed transfer and seed progress before
+    // Hugging Face metadata arrives so the row never flashes back to zero.
+    let resumedBytes = pausedDownloads.removeValue(forKey: model.id)?.bytesOnDisk ?? 0
 
     logger.info("Starting download for model: \(model.displayName)")
 
@@ -213,6 +270,27 @@ class ModelManager: NSObject, URLSessionDataDelegate {
         self.logger.info("HF download plan ready for \(model.displayName): \(plan.repoDir)")
         self.startDownloadTasks(model: model, files: filesToDownload)
       }
+    }
+  }
+
+  private static var queuedDownloadsURL: URL {
+    UserSettings.appSupportDir.appendingPathComponent("downloads-queue.json")
+  }
+
+  private static func loadQueuedDownloads() -> [QueuedModelDownload] {
+    guard let data = try? Data(contentsOf: queuedDownloadsURL),
+      let downloads = try? JSONDecoder().decode([QueuedModelDownload].self, from: data)
+    else { return [] }
+    return downloads
+  }
+
+  private func persistQueuedDownloads() {
+    do {
+      let directory = Self.queuedDownloadsURL.deletingLastPathComponent()
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+      try JSONEncoder().encode(queuedDownloads).write(to: Self.queuedDownloadsURL, options: .atomic)
+    } catch {
+      logger.error("Failed to persist queued downloads: \(error.localizedDescription)")
     }
   }
 
@@ -376,6 +454,9 @@ class ModelManager: NSObject, URLSessionDataDelegate {
     }
     if let download = activeDownloads[model.id] {
       return .downloading(download.progress)
+    }
+    if let position = queuedDownloads.firstIndex(where: { $0.model.id == model.id }) {
+      return .queued(position: position + 1)
     }
     if let paused = pausedDownloads[model.id] {
       return .paused(bytesOnDisk: paused.bytesOnDisk, totalBytes: model.fileSize)
@@ -673,8 +754,15 @@ class ModelManager: NSObject, URLSessionDataDelegate {
     // fold in the rehydrated on-disk placeholders. The merge is idempotent: a
     // download paused this session has both an in-memory entry and a placeholder
     // carrying the same `Model`, and an active download's id is excluded below.
-    let excluded = Set(downloadedModels.map(\.id))
+    let installedIds = Set(downloadedModels.map(\.id))
+    let excluded = installedIds
       .union(activeDownloads.keys)
+      .union(queuedDownloads.map { $0.model.id })
+    let filteredQueue = queuedDownloads.filter { !installedIds.contains($0.model.id) }
+    if filteredQueue.count != queuedDownloads.count {
+      queuedDownloads = filteredQueue
+      persistQueuedDownloads()
+    }
     pausedDownloads = pausedDownloads.filter { !excluded.contains($0.key) }
     for entry in result.paused where !excluded.contains(entry.model.id) {
       // Preserve an existing entry's resumeOnReconnect flag — placeholders know
@@ -690,6 +778,10 @@ class ModelManager: NSObject, URLSessionDataDelegate {
     syncServer()
 
     NotificationCenter.default.post(name: .LBModelDownloadedListDidChange, object: self)
+
+    // Restored queue entries wait until the cache scan reconciles installed
+    // models and partial placeholders.
+    startNextQueuedDownloads()
 
     // Kick off async mem-profile probing for models without cached results
     if !result.needsProfile.isEmpty {
@@ -746,6 +838,10 @@ class ModelManager: NSObject, URLSessionDataDelegate {
   /// Discards an ongoing or paused download — removes `.partial` files, clears
   /// bookkeeping. A subsequent start begins from byte zero.
   func cancelModelDownload(_ model: Model) {
+    if let index = queuedDownloads.firstIndex(where: { $0.model.id == model.id }) {
+      queuedDownloads.remove(at: index)
+      persistQueuedDownloads()
+    }
     tearDownActiveDownload(modelId: model.id, outcome: .discard)
   }
 
@@ -766,6 +862,11 @@ class ModelManager: NSObject, URLSessionDataDelegate {
   /// Returns true if the model is currently downloading.
   func isDownloading(_ model: Model) -> Bool {
     if case .downloading = status(for: model) { return true }
+    return false
+  }
+
+  func isQueued(_ model: Model) -> Bool {
+    if case .queued = status(for: model) { return true }
     return false
   }
 
@@ -855,6 +956,7 @@ class ModelManager: NSObject, URLSessionDataDelegate {
     // from having to remember to fire the right notifications.
     NotificationCenter.default.post(name: .LBModelDownloadsDidChange, object: self)
     NotificationCenter.default.post(name: .LBModelDownloadedListDidChange, object: self)
+    startNextQueuedDownloads()
   }
 
   /// Single failure-reporting path: tears down the download (keeping partials so

@@ -23,6 +23,10 @@ final class ModelActionHandler {
       // flips to paused and the user can resume with another click. Discard is the
       // explicit red-X action, not row-body / pause-button click.
       modelManager.pauseModelDownload(model)
+    } else if modelManager.isQueued(model) {
+      // Clicking a queued row removes it from the FIFO queue; the hover X does
+      // the same without needing to open the row body.
+      modelManager.cancelModelDownload(model)
     } else {
       // Available OR paused — downloadModel resumes from an existing `.partial` if present.
       startDownload(for: model)

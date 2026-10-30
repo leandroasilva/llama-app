@@ -13,6 +13,13 @@ struct PausedDownload {
   var resumeOnReconnect = false
 }
 
+/// A queued model install persists independently of active URLSession tasks, so
+/// ordering survives app restarts without starting large transfers on launch.
+struct QueuedModelDownload: Codable {
+  let model: Model
+  let queuedAt: Date
+}
+
 /// Tracks the progress of a multi-file model download.
 ///
 /// Bytes-in-flight are tracked externally (ModelManager owns the per-task

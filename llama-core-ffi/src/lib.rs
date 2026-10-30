@@ -1082,6 +1082,7 @@ fn dispatch_hf_request(method: &str, args: &Value) -> Value {
 fn dispatch_engine(method: &str, args: &Value) -> Value {
     match method {
         "engine.managedPath" => json!({ "path": binaries::managed_path(arg_str(args, "home")) }),
+        "engine.targetRelease" => json!(binaries::target_release()),
         "engine.metalConfig" => match installer::metal_config(arg_str(args, "brand")) {
             Ok(config) => json!({ "config": config }),
             Err(e) => json!({ "error": e.kind(), "message": e.message() }),

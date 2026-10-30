@@ -10,6 +10,7 @@ extension Notification.Name {
   // the HF cache), so the menu bar can flag a not-yet-seen completion on its icon.
   static let LBModelDownloadDidComplete = Notification.Name("LBModelDownloadDidComplete")
   static let LBModelStatusDidChange = Notification.Name("LBModelStatusDidChange")
+  static let LBServerMetricsDidChange = Notification.Name("LBServerMetricsDidChange")
   // Posted when some background flow wants the menu bar to surface a short
   // speech-bubble hint (e.g. deeplink install started). userInfo["message"]
   // carries the text.

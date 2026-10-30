@@ -343,7 +343,11 @@ pub fn build_launch_spec(input: &LaunchSpecInput<'_>) -> Option<LaunchSpec> {
         arguments.extend(["--sleep-idle-seconds".to_string(), seconds.to_string()]);
     }
 
-    arguments.extend(["--jinja".to_string(), "--spec-default".to_string()]);
+    arguments.extend([
+        "--jinja".to_string(),
+        "--spec-default".to_string(),
+        "--metrics".to_string(),
+    ]);
 
     if input.agent_mode {
         arguments.push("--agent".to_string());
@@ -650,6 +654,7 @@ mod tests {
                 "300",
                 "--jinja",
                 "--spec-default",
+                "--metrics",
                 "--agent",
                 "--ctx-size",
                 "8192",

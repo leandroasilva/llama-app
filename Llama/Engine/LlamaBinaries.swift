@@ -24,15 +24,20 @@ enum LlamaBinaries {
     LlamaCore.callValue("engine.managedPath", "path", ["home": NSHomeDirectory()])
     ?? (NSHomeDirectory() as NSString).appendingPathComponent(".llama-app/llama")
 
-  /// The build the app installs and keeps its own binary at -- the pinned
-  /// target, not whatever is newest. Bump per app release after smoke-testing
-  /// `serve` + `fit-params`; the app's auto-updater then rolls it out.
-  static let targetVersion = LlamaVersion(parsing: "b12005")!
+  /// Version, artifact hash, and release channel share one Rust-owned manifest
+  /// (`llama-core/src/engine/release.json`) consumed through the FFI.
+  private static let targetRelease: [String: Any] = {
+    guard let release = LlamaCore.callJSON("engine.targetRelease", [:]),
+      release["version"] as? String != nil,
+      release["sha256"] as? String != nil
+    else { preconditionFailure("Missing llama.cpp release manifest") }
+    return release
+  }()
 
-  /// SHA-256 advertised by the GitHub release API for the pinned macOS arm64
-  /// archive. Keep this in sync with `targetVersion` when bumping the pin.
-  static let targetArtifactSHA256 =
-    "98b553ca5e3f96a4c9427b1357769db13f34687b181858e38e4284399c9ab0e7"
+  /// The managed binary pin, not necessarily the newest upstream build.
+  static let targetVersion = LlamaVersion(parsing: targetRelease["version"] as! String)!
+  static let targetArtifactSHA256 = targetRelease["sha256"] as! String
+  static let targetReleaseChannel = targetRelease["channel"] as? String ?? "stable"
 
   /// The minimum build the app accepts from an unmanaged install (e.g. Homebrew)
   /// before nudging the user to update -- the app can't update those itself.

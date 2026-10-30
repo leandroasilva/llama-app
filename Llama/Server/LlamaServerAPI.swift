@@ -9,6 +9,35 @@ enum ModelLoadState: String, Equatable {
   case unloaded
 }
 
+/// Live throughput and request activity exported by llama.cpp's Prometheus
+/// `/metrics` endpoint. These gauges are aggregate engine metrics; they never
+/// include prompt or completion text.
+struct ServerRuntimeMetrics: Equatable {
+  let promptTokensPerSecond: Double
+  let generationTokensPerSecond: Double
+  let requestsProcessing: Int
+
+  init?(prometheus: String) {
+    var values: [String: Double] = [:]
+    for line in prometheus.split(whereSeparator: \.isNewline) {
+      guard !line.hasPrefix("#"), let separator = line.lastIndex(of: " ") else { continue }
+      let rawName = line[..<separator]
+      let name = rawName.prefix { $0 != "{" }.split(separator: ":").last.map(String.init) ?? ""
+      guard let value = Double(line[line.index(after: separator)...]), value.isFinite else { continue }
+      values[name] = value
+    }
+
+    guard let prompt = values["prompt_tokens_seconds"],
+      let generation = values["predicted_tokens_seconds"],
+      let requests = values["requests_processing"]
+    else { return nil }
+
+    promptTokensPerSecond = max(0, prompt)
+    generationTokensPerSecond = max(0, generation)
+    requestsProcessing = max(0, Int(requests))
+  }
+}
+
 /// HTTP client for communicating with llama-server's REST API.
 /// Encapsulates request building and response parsing for server endpoints.
 struct LlamaServerAPI {
@@ -53,6 +82,14 @@ struct LlamaServerAPI {
     }
   }
 
+  /// Fetches Prometheus gauges for one model in llama-server's router.
+  func fetchRuntimeMetrics(modelId: String) async -> ServerRuntimeMetrics? {
+    guard var components = URLComponents(string: "\(baseUrl)/metrics") else { return nil }
+    components.queryItems = [URLQueryItem(name: "model", value: modelId)]
+    guard let url = components.url, let data = await get(url: url, timeout: 2.0) else { return nil }
+    return ServerRuntimeMetrics(prometheus: String(decoding: data, as: UTF8.self))
+  }
+
   // MARK: - Private Helpers
 
   // Always the current effective host and port -- read live so a runtime change
@@ -86,6 +123,11 @@ struct LlamaServerAPI {
   /// Sends a GET request and returns the response data.
   private func get(endpoint: String, timeout: TimeInterval = 2.0) async -> Data? {
     guard let url = URL(string: "\(baseUrl)/\(endpoint)") else { return nil }
+
+    return await get(url: url, timeout: timeout)
+  }
+
+  private func get(url: URL, timeout: TimeInterval) async -> Data? {
 
     var request = URLRequest(url: url)
     request.timeoutInterval = timeout

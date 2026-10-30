@@ -62,7 +62,9 @@ final class FooterView: ItemView {
     // legitimately trail the pin.
     let marker: String
     switch llamaOrigin {
-    case .managed: marker = ""
+    case .managed:
+      marker = llamaVersion == LlamaBinaries.targetVersion.tag
+        && LlamaBinaries.targetReleaseChannel != "stable" ? " · preview" : ""
     case .brew: marker = " · brew"
     case .external: marker = " · ext"
     }

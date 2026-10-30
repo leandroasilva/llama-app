@@ -641,6 +641,14 @@ fn fase4_engine() {
     .unwrap();
     assert_eq!(out["path"], "/Users/fixture/.llama-app/llama");
 
+    let release: serde_json::Value = serde_json::from_str(
+        &call("engine.targetRelease", "{}").unwrap(),
+    )
+    .unwrap();
+    assert_eq!(release["version"], "b12005");
+    assert_eq!(release["channel"], "preview");
+    assert_eq!(release["sha256"].as_str().unwrap().len(), 64);
+
     // metalConfig: matched and unsupported.
     assert_eq!(
         call("engine.metalConfig", r#"{"brand":"Apple M3 Pro"}"#).unwrap(),

@@ -44,6 +44,8 @@ final class ModelLoadMetrics {
 
   private var active: ActiveLoad?
   private var records: [ModelLoadMetric] = []
+  private(set) var currentResidentBytes: UInt64 = 0
+  private(set) var currentPhysicalFootprintBytes: UInt64 = 0
 
   init() {
     records = Self.loadRecords()
@@ -52,6 +54,8 @@ final class ModelLoadMetrics {
   var activeModelId: String? {
     active?.modelId
   }
+
+  var mostRecentLoad: ModelLoadMetric? { records.last }
 
   func begin(model: Model, processID: pid_t?) {
     guard active == nil else { return }
@@ -68,8 +72,10 @@ final class ModelLoadMetrics {
   }
 
   func sample(processID: pid_t?) {
-    guard var active else { return }
     let snapshot = processID.flatMap(ProcessMemorySnapshot.init(pid:)) ?? .zero
+    currentResidentBytes = snapshot.residentBytes
+    currentPhysicalFootprintBytes = snapshot.physicalFootprintBytes
+    guard var active else { return }
     active.sampleCount += 1
     active.lastSnapshot = snapshot
     active.peakResidentBytes = max(active.peakResidentBytes, snapshot.residentBytes)

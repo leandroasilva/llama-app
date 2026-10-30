@@ -124,6 +124,13 @@ final class Phase4FixtureTests: XCTestCase {
     }
   }
 
+  func testPinnedEngineReleaseComesFromOneManifest() throws {
+    let release = try call("engine.targetRelease", [:])
+    XCTAssertEqual(release["version"] as? String, LlamaBinaries.targetVersion.tag)
+    XCTAssertEqual(release["sha256"] as? String, LlamaBinaries.targetArtifactSHA256)
+    XCTAssertEqual(release["channel"] as? String, "preview")
+  }
+
   // MARK: - binariesResolve (builds the fixture's trees in a temp dir)
 
   func testBinariesResolveThroughFFI() throws {
