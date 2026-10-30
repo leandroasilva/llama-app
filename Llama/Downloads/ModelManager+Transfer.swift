@@ -213,6 +213,10 @@ extension ModelManager {
   nonisolated private func finalizeTask(
     writer: PartialWriter, dataTask: URLSessionDataTask
   ) {
+    // Capture the digest while the core still has this writer registered.
+    // `close()` removes its handle from the registry, so asking for the digest
+    // afterwards always returns nil.
+    let computed = writer.digest()
     writer.close()
 
     let model = writer.model
@@ -235,7 +239,7 @@ extension ModelManager {
 
     // Digest over the bytes on disk, from the core's running hasher (which
     // covers the existing-prefix re-hash at open time plus streamed bytes).
-    guard let computed = writer.digest() else {
+    guard let computed else {
       try? FileManager.default.removeItem(at: writer.partialURL)
       handleDownloadFailure(
         model: model, reason: "Couldn't hash the downloaded file. Try again.")
