@@ -36,7 +36,7 @@ final class ModelItemView: ItemView, NSGestureRecognizerDelegate {
   /// for the largest of them: at `pausePlaySize` the circled pair would
   /// otherwise be scaled back down to fit `Layout.uiIconSize` and the size above
   /// cancelled out.
-  private static let trailingGlyphFrame: CGFloat = 18
+  private static let trailingGlyphFrame: CGFloat = Layout.modelTrailingGlyphSize
 
   private let model: Model
   private unowned let server: LlamaServer
@@ -169,7 +169,7 @@ final class ModelItemView: ItemView, NSGestureRecognizerDelegate {
     let leading = NSStackView(views: [iconView, textColumn])
     leading.orientation = .horizontal
     leading.alignment = .centerY
-    leading.spacing = 6
+    leading.spacing = Layout.modelRowHorizontalSpacing
 
     // Spacer
     let spacer = NSView()
@@ -184,7 +184,7 @@ final class ModelItemView: ItemView, NSGestureRecognizerDelegate {
       views: [leading, spacer, cancelImageView, chevronImageView, pausePlayImageView, loadUnloadImageView])
     rootStack.orientation = .horizontal
     rootStack.alignment = .centerY
-    rootStack.spacing = 6
+    rootStack.spacing = Layout.modelRowHorizontalSpacing
 
     contentView.addSubview(rootStack)
     rootStack.pinToSuperview()

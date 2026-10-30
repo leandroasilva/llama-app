@@ -28,11 +28,14 @@ enum Layout {
         return ceil(label.intrinsicContentSize.width)
       }.max() ?? 0
     // Chrome around the title in a model row: outer + inner padding on both
-    // sides, the leading icon and its 6pt spacing to the text, plus the root
-    // stack's two 6pt gaps around the flexible spacer (present even when the
-    // trailing accessories are hidden) — see ModelItemView.setupLayout.
+    // sides, the leading icon and its spacing, plus room for both trailing
+    // accessory columns and the three root-stack gaps they introduce when
+    // visible (cancel + pause/play while downloading, or chevron + load/unload
+    // while installed) — see ModelItemView.setupLayout.
     let rowChrome =
-      (outerHorizontalPadding + innerHorizontalPadding) * 2 + iconViewSize + 6 + 12
+      (outerHorizontalPadding + innerHorizontalPadding) * 2
+      + iconViewSize + modelRowHorizontalSpacing
+      + (modelTrailingGlyphSize * 2) + (modelRowHorizontalSpacing * 3)
     menuWidth = min(max(maxTitleWidth + rowChrome, baseMenuWidth), maxMenuWidth)
   }
   /// Distance from menu edge to background view (used in all menu items).
@@ -47,6 +50,10 @@ enum Layout {
   static let uiIconSize: CGFloat = 16
   /// Size for IconView containers (circular backgrounds for installed model icons).
   static let iconViewSize: CGFloat = 28
+  /// Size of the trailing glyph column in installed-model rows.
+  static let modelTrailingGlyphSize: CGFloat = 18
+  /// Horizontal spacing in installed-model rows, shared by their width calculation.
+  static let modelRowHorizontalSpacing: CGFloat = 6
   /// Vertical spacing between text lines in stacked labels (e.g., model name and metadata).
   static let textLineSpacing: CGFloat = 2
   /// Available width for content inside menu items (menu width minus outer and inner padding).

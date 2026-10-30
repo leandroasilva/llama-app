@@ -290,6 +290,26 @@ final class MenuController: NSObject, NSMenuDelegate {
     let pageModel = selectedModelId.flatMap { id in managed.first { $0.id == id } }
     if pageModel == nil { selectedModelId = nil }
 
+    // Size the menu to the installed titles before creating any views: rows
+    // capture Layout.menuWidth at init, and every other menu view should use
+    // the same width too.
+    var keyCounts = [String: Int]()
+    for model in managed {
+      keyCounts[ModelIdParser.displayKey(model.id), default: 0] += 1
+    }
+    let collidingKeys = Set(keyCounts.filter { $0.value > 1 }.keys)
+    Layout.fitMenuWidth(
+      toTitles: managed.map { model in
+        Format.modelName(
+          id: model.id,
+          color: Theme.Colors.textPrimary,
+          hasVision: model.hasVisionSupport,
+          draftHead: model.draftHead,
+          isDecision: model.isDecisionModel,
+          showTags: collidingKeys.contains(ModelIdParser.displayKey(model.id))
+        )
+      })
+
     // The server-status header is list chrome, not page chrome: a model page has
     // its own identity header, so skip the global one there.
     if pageModel == nil {
@@ -330,32 +350,6 @@ final class MenuController: NSObject, NSMenuDelegate {
     // the rest of the rebuild reuses it for the installed rows, the Discover
     // filter, the empty-state decision, and the membership snapshot below.
     let suggestions = managed.isEmpty ? visibleDiscoverSuggestions(managed: managed) : []
-
-    // Rows whose tags-hidden title (org prefix + name + params + quant) collides
-    // with another installed model's get their id's leftover tags shown as a
-    // tiebreaker -- e.g. two "gemma-3 4B Q4_0" installs where one is "it" and
-    // one is "it qat". Counted over the full list, not just visible rows, so
-    // titles don't change when the list collapses/expands.
-    var keyCounts = [String: Int]()
-    for model in managed {
-      keyCounts[ModelIdParser.displayKey(model.id), default: 0] += 1
-    }
-    let collidingKeys = Set(keyCounts.filter { $0.value > 1 }.keys)
-
-    // Size the menu to the installed titles before any views are built (every
-    // row captures Layout.menuWidth at init). Catalog models fit the base width;
-    // org-prefixed ids from power users widen the menu, up to a cap.
-    Layout.fitMenuWidth(
-      toTitles: managed.map { model in
-        Format.modelName(
-          id: model.id,
-          color: Theme.Colors.textPrimary,
-          hasVision: model.hasVisionSupport,
-          draftHead: model.draftHead,
-          isDecision: model.isDecisionModel,
-          showTags: collidingKeys.contains(ModelIdParser.displayKey(model.id))
-        )
-      })
 
     // A selected model replaces the whole list (header included) with its page,
     // like navigating to a page inside the menu. Resolved above, so a selection
