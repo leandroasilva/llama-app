@@ -655,10 +655,10 @@ fn fase4_engine() {
     assert_eq!(
         call(
             "engine.artifactUrl",
-            r#"{"version":"b11429","config":"m3"}"#
+            r#"{"version":"b12005"}"#
         )
         .unwrap(),
-        r#"{"url":"https://huggingface.co/buckets/ggml-org/install.sh/resolve/b11429/aarch64/macos/metal/m3/llama-app.zst"}"#
+        r#"{"url":"https://github.com/ggml-org/llama.cpp/releases/download/b12005/llama-b12005-bin-macos-arm64.tar.gz"}"#
     );
     assert_eq!(
         call("engine.unzstdUrl", r#"{"version":"b11429"}"#).unwrap(),
@@ -755,7 +755,7 @@ fn fase4_engine() {
             &serde_json::json!({ "path": bin.to_string_lossy() }).to_string()
         )
         .unwrap(),
-        r#"{"build":11429}"#
+        r#"{"build":12005}"#
     );
 
     // decompress: success + classified failure.
@@ -834,7 +834,7 @@ fn fase4_engine() {
             &serde_json::json!({
                 "staged": staged.to_string_lossy(),
                 "live": live2.to_string_lossy(),
-                "targetBuild": 11429,
+                "targetBuild": 12005,
                 "home": home,
             })
             .to_string()

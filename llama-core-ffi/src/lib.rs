@@ -1087,7 +1087,7 @@ fn dispatch_engine(method: &str, args: &Value) -> Value {
             Err(e) => json!({ "error": e.kind(), "message": e.message() }),
         },
         "engine.artifactUrl" => {
-            json!({ "url": installer::artifact_url(arg_str(args, "version"), arg_str(args, "config")) })
+            json!({ "url": installer::artifact_url(arg_str(args, "version")) })
         }
         "engine.unzstdUrl" => json!({ "url": installer::unzstd_url(arg_str(args, "version")) }),
         "engine.binariesResolve" => {

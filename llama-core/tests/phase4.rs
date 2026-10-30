@@ -90,7 +90,6 @@ struct MetalConfigCase {
 #[derive(Deserialize)]
 struct UrlCase {
     version: String,
-    config: Option<String>,
     url: String,
 }
 
@@ -134,7 +133,7 @@ fn artifact_urls_fixture() {
     let f: EngineFixture = load("engine.json");
     for c in &f.artifact_urls {
         assert_eq!(
-            artifact_url(&c.version, c.config.as_deref().unwrap()),
+            artifact_url(&c.version),
             c.url
         );
     }
@@ -300,7 +299,7 @@ fn read_version_parses_real_formats() {
     );
     assert_eq!(
         binaries::read_version(&stderr.to_string_lossy()),
-        Some(llama_core::engine::LlamaVersion { build: 11429 })
+        Some(binaries::target_version())
     );
     assert_eq!(binaries::read_version(&fail.to_string_lossy()), None);
     assert_eq!(

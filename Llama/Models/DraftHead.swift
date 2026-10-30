@@ -15,7 +15,7 @@ enum DraftHead: String, Codable {
   case dflash
 
   /// Kinds in order of preference, for repos that ship more than one head.
-  /// DFlash wins: on Qwen3.8-27B (Q8_0, M5 Max, engine b11429) it generated
+  /// DFlash wins: on Qwen3.8-27B (Q8_0, M5 Max, engine b12005) it generated
   /// 35-50% faster than MTP, and the llama.cpp maintainers recommend it over
   /// MTP whenever a model has both. Models that ship only an MTP head keep it.
   static let preferenceOrder: [DraftHead] = [.dflash, .mtp]

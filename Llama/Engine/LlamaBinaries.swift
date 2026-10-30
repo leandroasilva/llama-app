@@ -17,9 +17,8 @@ enum LlamaBinaries {
 
   private static let logger = Logger(subsystem: Logging.subsystem, category: "LlamaBinaries")
 
-  /// The curl-install path the app manages (matches `install.sh`'s layout).
-  /// The real binary lives in `~/.llama-app`; `install.sh` also drops a
-  /// `~/.local/bin/llama` symlink onto PATH, but the app points at the real file.
+  /// Stable managed path in `~/.llama-app`; it is an atomically switched symlink
+  /// to the active versioned release bundle. `~/.local/bin/llama` points here.
   /// Computed by the core (`engine.managedPath`).
   static let managedPath: String =
     LlamaCore.callValue("engine.managedPath", "path", ["home": NSHomeDirectory()])
@@ -28,7 +27,12 @@ enum LlamaBinaries {
   /// The build the app installs and keeps its own binary at -- the pinned
   /// target, not whatever is newest. Bump per app release after smoke-testing
   /// `serve` + `fit-params`; the app's auto-updater then rolls it out.
-  static let targetVersion = LlamaVersion(parsing: "b11429")!
+  static let targetVersion = LlamaVersion(parsing: "b12005")!
+
+  /// SHA-256 advertised by the GitHub release API for the pinned macOS arm64
+  /// archive. Keep this in sync with `targetVersion` when bumping the pin.
+  static let targetArtifactSHA256 =
+    "98b553ca5e3f96a4c9427b1357769db13f34687b181858e38e4284399c9ab0e7"
 
   /// The minimum build the app accepts from an unmanaged install (e.g. Homebrew)
   /// before nudging the user to update -- the app can't update those itself.

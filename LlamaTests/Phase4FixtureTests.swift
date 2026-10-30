@@ -193,9 +193,9 @@ final class Phase4FixtureTests: XCTestCase {
     let failing = try copyScript("fake-llama-fail", to: "fail/llama")
 
     var out = try call("engine.readVersion", ["path": ok])
-    XCTAssertEqual(out["build"] as? Int64, 11429)
+    XCTAssertEqual(out["build"] as? Int64, 12005)
     out = try call("engine.readVersion", ["path": stderr])
-    XCTAssertEqual(out["build"] as? Int64, 11429, "version on stderr must be found")
+    XCTAssertEqual(out["build"] as? Int64, 12005, "version on stderr must be found")
     out = try call("engine.readVersion", ["path": failing])
     XCTAssertEqual(out["build"] as? NSNull, NSNull(), "non-zero exit → no version")
     out = try call("engine.readVersion", ["path": tempDir.appendingPathComponent("missing").path])
@@ -273,7 +273,7 @@ final class Phase4FixtureTests: XCTestCase {
     // Nothing staged.
     var out = try call("engine.promoteStaged", [
       "staged": tempDir.appendingPathComponent("missing").path,
-      "live": live, "targetBuild": 11429, "home": home,
+      "live": live, "targetBuild": 12005, "home": home,
     ])
     XCTAssertEqual(out["outcome"] as? String, "nothingStaged")
 
@@ -289,7 +289,7 @@ final class Phase4FixtureTests: XCTestCase {
     // Matching target → promoted + PATH symlink refreshed.
     let staged = try copyScript("fake-llama-ok", to: "staged/llama")
     out = try call("engine.promoteStaged", [
-      "staged": staged, "live": live, "targetBuild": 11429, "home": home,
+      "staged": staged, "live": live, "targetBuild": 12005, "home": home,
     ])
     XCTAssertEqual(out["outcome"] as? String, "promoted")
     let mode = (try FileManager.default.attributesOfItem(atPath: live)[.posixPermissions]) as! Int

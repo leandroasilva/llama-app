@@ -11,13 +11,15 @@ use super::partial_writer::sha256_hex;
 use super::version::LlamaVersion;
 use crate::net::response::blob_hash;
 
-/// Root of the prebuilt-binary bucket. `…/resolve/latest` returns the current
-/// version tag (e.g. `b9553`); `…/resolve/<ver>/<arch>/<os>/…` are artifacts.
-pub const BUCKET_BASE: &str = "https://huggingface.co/buckets/ggml-org/install.sh/resolve";
+/// Official upstream release assets. The macOS arm64 archive contains the
+/// unified executable and all version-matched dynamic libraries.
+pub const RELEASE_BASE: &str = "https://github.com/ggml-org/llama.cpp/releases/download";
 
-/// We only ship prebuilt Apple Silicon (Metal) macOS binaries.
-pub const ARCH: &str = "aarch64";
-pub const OS: &str = "macos";
+// Retained for the legacy zstd helper tests; the release-archive installer no
+// longer downloads this Hugging Face bucket artifact.
+const BUCKET_BASE: &str = "https://huggingface.co/buckets/ggml-org/install.sh/resolve";
+const ARCH: &str = "aarch64";
+const OS: &str = "macos";
 
 /// The on-PATH symlink `install.sh` creates so `llama` works in a terminal.
 
@@ -67,9 +69,9 @@ pub fn metal_config(brand: &str) -> Result<String, InstallError> {
     Ok(m.as_str()[6..].to_lowercase())
 }
 
-/// The zstd-compressed binary artifact URL for a version + Metal config.
-pub fn artifact_url(version: &str, config: &str) -> String {
-    format!("{BUCKET_BASE}/{version}/{ARCH}/{OS}/metal/{config}/llama-app.zst")
+/// The official macOS Apple Silicon release archive URL.
+pub fn artifact_url(version: &str) -> String {
+    format!("{RELEASE_BASE}/{version}/llama-{version}-bin-macos-arm64.tar.gz")
 }
 
 /// The standalone `unzstd` helper URL (macOS ships no zstd).

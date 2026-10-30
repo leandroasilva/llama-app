@@ -8,10 +8,8 @@
 
 use super::version::LlamaVersion;
 
-/// The app-managed install location, relative to the user's home directory
-/// (matches `install.sh`'s layout). The real binary lives in `~/.llama-app`;
-/// `install.sh` also drops a `~/.local/bin/llama` symlink onto PATH, but the
-/// app points at the real file.
+/// The app-managed stable executable path, relative to the user's home
+/// directory. It is an atomically switched symlink to a versioned release bundle.
 const MANAGED_RELATIVE: &str = ".llama-app/llama";
 
 /// Unmanaged locations to probe when the app hasn't installed its own binary.
@@ -37,8 +35,8 @@ impl Origin {
     }
 }
 
-/// The curl-install path the app manages. Mirrors
-/// `LlamaBinaries.managedPath` (`(NSHomeDirectory() as NSString).appendingPathComponent`).
+/// The stable path the app manages. Mirrors `LlamaBinaries.managedPath`
+/// (`(NSHomeDirectory() as NSString).appendingPathComponent`).
 pub fn managed_path(home: &str) -> String {
     join(home, MANAGED_RELATIVE)
 }
@@ -79,7 +77,7 @@ pub fn is_homebrew(path: &str) -> bool {
 /// The version constants of the engine policy. Pinned per app release; see the
 /// Swift original for the floor/multi-host rationale.
 pub fn target_version() -> LlamaVersion {
-    LlamaVersion { build: 11429 }
+    LlamaVersion { build: 12005 }
 }
 pub fn floor_version() -> LlamaVersion {
     LlamaVersion { build: 9831 }

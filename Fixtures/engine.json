@@ -15,8 +15,8 @@
     { "brand": "Intel(R) Core(TM) i7-9750H CPU @ 2.60GHz", "config": "unsupportedHardware" }
   ],
   "artifactUrls": [
-    { "version": "b11429", "config": "m3", "url": "https://huggingface.co/buckets/ggml-org/install.sh/resolve/b11429/aarch64/macos/metal/m3/llama-app.zst" },
-    { "version": "b9831", "config": "a18", "url": "https://huggingface.co/buckets/ggml-org/install.sh/resolve/b9831/aarch64/macos/metal/a18/llama-app.zst" }
+    { "version": "b12005", "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12005/llama-b12005-bin-macos-arm64.tar.gz" },
+    { "version": "b9831", "url": "https://github.com/ggml-org/llama.cpp/releases/download/b9831/llama-b9831-bin-macos-arm64.tar.gz" }
   ],
   "unzstdUrls": [
     { "version": "b11429", "url": "https://huggingface.co/buckets/ggml-org/install.sh/resolve/b11429/aarch64/macos/unzstd" }
