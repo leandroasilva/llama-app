@@ -313,6 +313,15 @@ enum HFCache {
     }) {}
   }
 
+  /// Lowercase SHA256 hex of a file's contents, streamed in 1 MB chunks.
+  /// Finalization uses this as a fallback when the core's running digest is
+  /// unavailable, so a completed `.partial` is verified instead of discarded.
+  static func hashFile(at fileURL: URL) throws -> String {
+    var hasher = SHA256()
+    try feedHasher(&hasher, from: fileURL)
+    return hex(hasher.finalize())
+  }
+
   // MARK: - Deletion
 
   /// Deletes a model's files from the HF cache.

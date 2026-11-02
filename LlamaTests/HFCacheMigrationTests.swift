@@ -1,8 +1,24 @@
+import CryptoKit
 import Foundation
 import XCTest
 @testable import Llama
 
 final class HFCacheMigrationTests: XCTestCase {
+  func testHashFileMatchesSHA256AcrossChunkBoundary() throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("hf-cache-hash-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+    let file = root.appendingPathComponent("model.gguf.partial")
+    var bytes = Data((0..<1_048_576).map { UInt8($0 % 251) })
+    bytes.append(contentsOf: "tail".utf8)
+    try bytes.write(to: file)
+
+    let expected = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+    XCTAssertEqual(try HFCache.hashFile(at: file), expected)
+  }
+
   func testMergeCopiesBlobsAndPreservesSnapshotSymlinks() throws {
     let root = FileManager.default.temporaryDirectory
       .appendingPathComponent("hf-cache-migration-\(UUID().uuidString)")
