@@ -8,7 +8,6 @@ struct AgentSettingsView: View {
     UserSettings.agentModelID ?? ModelManager.shared.downloadedModels.first?.id ?? ""
   @State private var modelOptions = ModelManager.shared.downloadedModels
   @State private var copiedAgent: String?
-  @State private var projectPath = UserSettings.agentProjectPath
 
   private var models: [Model] { modelOptions }
   private var selectedModel: Model? {
@@ -20,67 +19,23 @@ struct AgentSettingsView: View {
   var body: some View {
     Form {
       Section {
-        VStack(alignment: .leading, spacing: 10) {
-          Text("Built-in agent")
-            .font(.headline)
-
-          Text(
-            "A local coding agent that reads and edits files and runs commands in a project folder. "
-              + "It asks before changing anything and uses only the model installed in Llama."
-          )
-          .font(.callout)
-          .foregroundStyle(.secondary)
-          .fixedSize(horizontal: false, vertical: true)
-
-          SettingRow(
-            title: "Project folder",
-            description: "File tools stay inside this folder. Shell commands can reach more, so they ask first."
-          ) {
-            Button {
-              chooseProject()
-            } label: {
-              HStack(spacing: 6) {
-                Text(projectLabel)
-                  .lineLimit(1)
-                Image(systemName: "folder")
-              }
+        SettingRow(
+          title: "Model",
+          description: "The installed model used in the copied configurations."
+        ) {
+          Picker("Model", selection: $selectedModelID) {
+            ForEach(models, id: \.id) { model in
+              Text(model.displayName).tag(model.id)
             }
-            .frame(maxWidth: 250)
           }
-
-          SettingRow(
-            title: "Model",
-            description: "The installed model the built-in agent runs on."
-          ) {
-            Picker("Model", selection: $selectedModelID) {
-              ForEach(models, id: \.id) { model in
-                Text(model.displayName).tag(model.id)
-              }
-            }
-            .labelsHidden()
-            .frame(maxWidth: 250)
-            .disabled(models.isEmpty)
-          }
-
-          HStack(spacing: 10) {
-            Button("Open agent") {
-              AgentWindowController.shared.show()
-            }
-            .disabled(models.isEmpty)
-
-            Text("Opens in its own window.")
-              .font(.caption)
-              .foregroundStyle(.secondary)
-          }
+          .labelsHidden()
+          .frame(maxWidth: 250)
+          .disabled(models.isEmpty)
         }
-        .padding(.vertical, 4)
-      }
 
-      Section {
         SettingRow(
           title: "API endpoint",
-          description:
-            "OpenAI-compatible endpoint used by the built-in agent and the copied profiles below."
+          description: "OpenAI-compatible endpoint used by the copied profiles below."
         ) {
           Text(endpoint?.absoluteString ?? "llama.cpp is starting")
             .font(.system(.callout, design: .monospaced))
@@ -141,41 +96,6 @@ struct AgentSettingsView: View {
         selectedModelID = first
       }
     }
-    .onChange(of: projectPath) { _, path in
-      UserSettings.agentProjectPath = path
-    }
-  }
-
-  private var projectLabel: String {
-    guard let projectPath else { return "Choose…" }
-    return abbreviatedPath(URL(fileURLWithPath: projectPath))
-  }
-
-  private func chooseProject() {
-    let current = projectPath.map { URL(fileURLWithPath: $0) }
-    let selection = ModalPresentation.run { () -> URL? in
-      let panel = NSOpenPanel()
-      panel.canChooseFiles = false
-      panel.canChooseDirectories = true
-      panel.canCreateDirectories = false
-      panel.allowsMultipleSelection = false
-      panel.message = "Choose the project folder the agent can read and change"
-      panel.prompt = "Choose"
-      panel.directoryURL = current
-      return panel.runModal() == .OK ? panel.url : nil
-    }
-    if let selection {
-      projectPath = selection.path
-    }
-  }
-
-  private func abbreviatedPath(_ url: URL, maxLen: Int = 34) -> String {
-    let path = url.path
-    let home = FileManager.default.homeDirectoryForCurrentUser.path
-    let abbreviated = path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
-    guard abbreviated.count > maxLen else { return abbreviated }
-    let keep = maxLen - 1
-    return "\(abbreviated.prefix(keep - keep / 2))…\(abbreviated.suffix(keep / 2))"
   }
 
   private func refreshModels() {

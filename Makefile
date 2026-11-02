@@ -1,4 +1,4 @@
-.PHONY: build build-release test test-rust test-swift lint lint-rust lint-swift fmt fmt-rust fmt-swift clean
+.PHONY: build build-release build-agent install-agent test test-rust test-swift lint lint-rust lint-swift fmt fmt-rust fmt-swift clean
 
 # Default target
 all: build
@@ -32,6 +32,35 @@ build-debug:
 		CODE_SIGN_IDENTITY=- \
 		CODE_SIGNING_REQUIRED=NO \
 		CODE_SIGNING_ALLOWED=NO
+
+# --- Terminal agent ---
+
+AGENT_SOURCES = \
+	Llama/Agent/AgentTypes.swift \
+	Llama/Agent/AgentClient.swift \
+	Llama/Agent/AgentTools.swift \
+	Llama/Agent/AgentRunner.swift \
+	LlamaAgentCLI/Arguments.swift \
+	LlamaAgentCLI/Configuration.swift \
+	LlamaAgentCLI/ServerClient.swift \
+	LlamaAgentCLI/Terminal.swift \
+	LlamaAgentCLI/Main.swift
+
+AGENT_BINARY = build/agent/llama-agent
+PREFIX ?= /usr/local
+
+build-agent:
+	@echo "Building llama-agent..."
+	@mkdir -p build/agent
+	xcrun swiftc -swift-version 5 -O -parse-as-library \
+		-target arm64-apple-macos15.0 \
+		$(AGENT_SOURCES) \
+		-o $(AGENT_BINARY)
+
+install-agent: build-agent
+	@echo "Installing llama-agent to $(PREFIX)/bin..."
+	install -d $(PREFIX)/bin
+	install -m 755 $(AGENT_BINARY) $(PREFIX)/bin/llama-agent
 
 # --- Test ---
 
@@ -91,6 +120,8 @@ help:
 	@echo "Available targets:"
 	@echo "  build          Build Rust core (release) + Swift app"
 	@echo "  build-debug    Build Rust core (debug) + Swift app"
+	@echo "  build-agent    Build the llama-agent terminal client"
+	@echo "  install-agent  Build and install llama-agent (PREFIX=/usr/local)"
 	@echo "  test           Run all tests (Rust + Swift)"
 	@echo "  test-rust      Run Rust tests only"
 	@echo "  test-swift     Run Swift tests only"
