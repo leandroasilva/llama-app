@@ -45,6 +45,7 @@ final class HeaderView: ItemView {
   private let qrButton = NSButton()
   private let qrImageView = NSImageView()
   private let webUiLabel = Theme.secondaryLabel()
+  private let agentLabel = Theme.secondaryLabel()
   private let restartLabel = Theme.secondaryLabel()
 
   private var currentUrl: URL?
@@ -114,6 +115,17 @@ final class HeaderView: ItemView {
     webUiLabel.addGestureRecognizer(
       NSClickGestureRecognizer(target: self, action: #selector(openWebUi)))
 
+    // The built-in coding agent lives in its own window, but the menu is where
+    // people look for it: the same spot as the chat link, one step closer.
+    agentLabel.attributedStringValue = NSAttributedString(
+      string: "Agent",
+      attributes: Theme.secondaryAttributes(color: .linkColor)
+    )
+    agentLabel.isSelectable = false
+    agentLabel.toolTip = "Open the built-in coding agent"
+    agentLabel.addGestureRecognizer(
+      NSClickGestureRecognizer(target: self, action: #selector(openAgent)))
+
     // Shown in place of the chat link when the server is in an error state, so
     // the user has a way to retry from the menu.
     restartLabel.attributedStringValue = NSAttributedString(
@@ -127,7 +139,7 @@ final class HeaderView: ItemView {
 
     let actionRow = NSStackView(views: [
       addressLabel, copyButton, qrButton, statusLabel, NSView.flexibleSpacer(), webUiLabel,
-      restartLabel,
+      agentLabel, restartLabel,
     ])
     actionRow.orientation = .horizontal
     actionRow.alignment = .centerY
@@ -178,6 +190,7 @@ final class HeaderView: ItemView {
       showingQRCode = false
       qrImageView.isHidden = true
       webUiLabel.isHidden = true
+      agentLabel.isHidden = true
       restartLabel.isHidden = false
       needsDisplay = true
       return
@@ -227,6 +240,7 @@ final class HeaderView: ItemView {
         scale: window?.backingScaleFactor ?? 2)
     }
     webUiLabel.isHidden = false
+    agentLabel.isHidden = false
     restartLabel.isHidden = true
 
     needsDisplay = true
@@ -264,6 +278,10 @@ final class HeaderView: ItemView {
     if let url = webUiUrl {
       openInBrowser(url)
     }
+  }
+
+  @objc private func openAgent() {
+    AgentWindowController.shared.show()
   }
 
   /// Expands or collapses the code in place.

@@ -9,6 +9,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
   private var window: NSWindow?
 
+  /// Whether the settings window is currently on screen. The agent window uses
+  /// this when it closes so it doesn't hand the app back to accessory mode
+  /// while settings is still open (and vice versa).
+  var hasVisibleWindow: Bool { window?.isVisible == true }
+
   /// The selected sidebar section. Held here (rather than as SwiftUI state)
   /// because the window title tracks it.
   private let tabSelection = SettingsTabSelection()
@@ -95,7 +100,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
   }
 
   func windowWillClose(_ notification: Notification) {
-    NSApp.setActivationPolicy(.accessory)
+    if !AgentWindowController.shared.hasVisibleWindow {
+      NSApp.setActivationPolicy(.accessory)
+    }
   }
 }
 

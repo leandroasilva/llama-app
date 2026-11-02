@@ -54,6 +54,8 @@ enum UserSettings {
     static let globalInputShortcut = "globalInputShortcut"
     static let customWebUIDirectory = "customWebUIDirectory"
     static let modelAliases = "modelAliases"
+    static let agentModelID = "agentModelID"
+    static let agentProjectPath = "agentProjectPath"
   }
 
   private static let defaults = UserDefaults.standard
@@ -381,6 +383,22 @@ enum UserSettings {
       defaults.set(newValue, forKey: Keys.agentMode)
       NotificationCenter.default.post(name: .LBUserSettingsDidChange, object: nil)
     }
+  }
+
+  /// The installed model the built-in coding agent should use, or `nil` when
+  /// the user hasn't picked one yet. Callers re-validate it against the
+  /// installed set, since a model can be deleted between launches.
+  static var agentModelID: String? {
+    get { defaults.string(forKey: Keys.agentModelID) }
+    set { defaults.set(newValue, forKey: Keys.agentModelID) }
+  }
+
+  /// The project folder the built-in coding agent works in. Stored as a path:
+  /// the app isn't sandboxed, so it can reopen the folder without a bookmark.
+  /// Callers treat a missing folder as "not chosen".
+  static var agentProjectPath: String? {
+    get { defaults.string(forKey: Keys.agentProjectPath) }
+    set { defaults.set(newValue, forKey: Keys.agentProjectPath) }
   }
 
   // MARK: - Custom Web App
