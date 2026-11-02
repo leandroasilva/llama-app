@@ -101,6 +101,7 @@
 			buildConfigurationList = 156891A82E2685F900F71BD4 /* Build configuration list for PBXNativeTarget "Llama" */;
 			buildPhases = (
 				2A000000000000000000000C /* Build Rust core */,
+				2A000000000000000000000D /* Build llama-agent */,
 				156891982E2685F700F71BD4 /* Sources */,
 				156891992E2685F700F71BD4 /* Frameworks */,
 				1568919A2E2685F700F71BD4 /* Resources */,
@@ -204,6 +205,25 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		2A000000000000000000000D /* Build llama-agent */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build llama-agent";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -euo pipefail\ncd \"$SRCROOT\"\nDEST=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/llama-agent\"\nmkdir -p \"$(dirname \"$DEST\")\"\nxcrun swiftc -swift-version 5 -O -parse-as-library \\\n  -target arm64-apple-macos15.0 \\\n  Llama/Agent/AgentTypes.swift \\\n  Llama/Agent/AgentClient.swift \\\n  Llama/Agent/AgentTools.swift \\\n  Llama/Agent/AgentRunner.swift \\\n  LlamaAgentCLI/Arguments.swift \\\n  LlamaAgentCLI/Configuration.swift \\\n  LlamaAgentCLI/ServerClient.swift \\\n  LlamaAgentCLI/Terminal.swift \\\n  LlamaAgentCLI/Main.swift \\\n  -o \"$DEST\"\nchmod 755 \"$DEST\"\nif [ \"${CODE_SIGNING_ALLOWED:-NO}\" = \"YES\" ]; then\n  SIGN_IDENTITY=\"${EXPANDED_CODE_SIGN_IDENTITY:--}\"\n  if [ -z \"$SIGN_IDENTITY\" ] || [ \"$SIGN_IDENTITY\" = \"-\" ]; then\n    /usr/bin/codesign --force --sign - \"$DEST\"\n  else\n    /usr/bin/codesign --force --options runtime --timestamp --sign \"$SIGN_IDENTITY\" \"$DEST\"\n  fi\nfi\n";
+		};
 		2A000000000000000000000C /* Build Rust core */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;

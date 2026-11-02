@@ -91,15 +91,18 @@ final class AgentRunnerTests: XCTestCase {
 
   func testTextAndReasoningDeltasAreForwarded() async throws {
     let recorder = Recorder()
-    let runner = makeRunner(recorder) { _ in
-      AsyncThrowingStream { continuation in
-        continuation.yield(.reasoningDelta("thinking"))
-        continuation.yield(.textDelta("Hel"))
-        continuation.yield(.textDelta("lo"))
-        continuation.yield(.completed(content: "Hello", toolCalls: [], finishReason: "stop"))
-        continuation.finish()
-      }
-    }
+    let runner = AgentRunner(
+      modelID: "test-model", workspaceURL: root,
+      streamFactory: { _, messages, _ in
+        recorder.messages.append(messages)
+        return AsyncThrowingStream { continuation in
+          continuation.yield(.reasoningDelta("thinking"))
+          continuation.yield(.textDelta("Hel"))
+          continuation.yield(.textDelta("lo"))
+          continuation.yield(.completed(content: "Hello", toolCalls: [], finishReason: "stop"))
+          continuation.finish()
+        }
+      })
 
     var events: [AgentEvent] = []
     try await runner.send("Hi", onEvent: { events.append($0) })
