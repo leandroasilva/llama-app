@@ -55,7 +55,7 @@ Model downloads use a FIFO queue with one model download active at a time. Queue
 
 ### Custom model settings
 
-The app auto-generates `models.ini` with optimal settings for each model on your hardware. Override anything by editing `~/.config/llama/models.user.ini` — the app reads it on every launch and merges your values on top. A commented template is seeded on first launch.
+The app auto-generates `models.ini` with optimal settings for each model on your hardware. Settings → Performance controls the defaults for context length, flash attention, KV cache type, and batch sizes, with per-model overrides. Override anything else by editing `~/.config/llama/models.user.ini` — the app reads it on every launch and merges your values on top. A commented template is seeded on first launch.
 
 ```ini
 [ggml-org/gemma-4-E4B-it-GGUF:Q8_0]
@@ -123,9 +123,17 @@ curl http://localhost:9931/v1/chat/completions \
 
 All llama.cpp server endpoints are available. See the [llama.cpp server docs](https://github.com/ggml-org/llama.cpp/tree/master/tools/server#api-endpoints) for the full reference.
 
-### Coding agents
+### Coding agent
 
-Open **Settings → Agents** to choose an installed model and copy connection settings for OpenCode or Codex CLI. OpenCode uses the OpenAI-compatible Chat Completions endpoint; Codex uses llama.cpp's Responses endpoint. When network access is enabled, the generated configuration references `LLAMA_API_KEY` from the environment instead of copying the secret.
+Install the bundled `llama-agent` from **Settings → Agents**, then run it from Terminal:
+
+```sh
+llama-agent ~/code/my-project
+llama-agent run ~/code/my-project "Explain the build setup"
+llama-agent models
+```
+
+It connects to the local OpenAI-compatible server at `http://127.0.0.1:9931` by default. Use `--attach` or `--port` for another server, `--model` to pick a model, `--ctx` to set the context window, `--auto` to approve writes automatically, and `--format json` for machine-readable output.
 
 ## Advanced configuration
 

@@ -524,7 +524,7 @@ fn compat_fixtures() {
         let selected = c["selected"].as_i64().and_then(ContextTier::from_raw);
         assert_eq!(
             mem(c)
-                .effective_ctx_tier(c["budgetMb"].as_f64().unwrap(), selected)
+                .effective_ctx_tier(c["budgetMb"].as_f64().unwrap(), selected, false)
                 .map(|t| t.raw_value()),
             c["tier"].as_i64()
         );

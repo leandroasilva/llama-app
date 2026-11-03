@@ -922,7 +922,11 @@ fn dispatch_compat(method: &str, args: &Value) -> Value {
                 .get("selected")
                 .and_then(Value::as_i64)
                 .and_then(ContextTier::from_raw);
-            json!({ "tier": mem.effective_ctx_tier(arg_f(args, "budgetMb"), selected).map(|t| t.raw_value()) })
+            let prefer_largest = args
+                .get("preferLargest")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            json!({ "tier": mem.effective_ctx_tier(arg_f(args, "budgetMb"), selected, prefer_largest).map(|t| t.raw_value()) })
         }
         _ => json!({ "error": format!("unknown method: {method}") }),
     }

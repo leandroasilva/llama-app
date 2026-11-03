@@ -75,7 +75,7 @@ void llama_core_free(char *s);
  * `data` must be NULL only when `len` is 0, else a pointer to at least `len`
  * readable bytes. `handle` must come from a live `partial.open`.
  */
-int llama_core_partial_append(uint64_t handle, const uint8_t *data, size_t len);
+int llama_core_partial_append(uint64_t handle, const uint8_t *data, uintptr_t len);
 
 #ifdef __cplusplus
 }  // extern "C"

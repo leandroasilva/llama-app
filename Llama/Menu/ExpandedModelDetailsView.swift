@@ -5,10 +5,10 @@ import Foundation
 /// Shows a full-width segmented picker where every segment pairs a tier label
 /// with that tier's projected memory cost, so the context-length -> memory
 /// relationship is visible at a glance without per-tier rows. Selecting a
-/// tier updates user preferences and reloads the server if running.
+/// tier updates user preferences; the performance notification regenerates
+/// models.ini and reloads the server if running.
 final class ExpandedModelDetailsView: ItemView {
   private let model: Model
-  private unowned let server: LlamaServer
 
   // Tiers backing the picker, in the order they appear (index = segment).
   private var tiers: [ContextTier] = []
@@ -26,12 +26,8 @@ final class ExpandedModelDetailsView: ItemView {
   // The segment row container -- outlined to give the picker a defined shape.
   private var picker: NSStackView?
 
-  init(
-    model: Model,
-    server: LlamaServer
-  ) {
+  init(model: Model) {
     self.model = model
-    self.server = server
     super.init(frame: .zero)
     setupLayout()
   }
@@ -332,16 +328,9 @@ final class ExpandedModelDetailsView: ItemView {
     // Skip the rest if this is already the active tier.
     guard tier != model.effectiveCtxTier else { return }
 
-    // Save the new preference
+    // Saves the preference and posts the performance notification, which
+    // regenerates models.ini and restarts a running server.
     UserSettings.setSelectedCtxTier(tier, for: model.id)
-
-    // Regenerate models.ini and reload server
-    ModelManager.shared.updateModelsFile()
-
-    // If this model is running, restart the server to apply the new context size
-    if server.isActive(model: model) {
-      server.reload()
-    }
   }
 
 }

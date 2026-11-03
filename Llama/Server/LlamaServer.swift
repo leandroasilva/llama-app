@@ -213,6 +213,7 @@ class LlamaServer {
   var mostRecentLoadMetric: ModelLoadMetric? { loadMetrics.mostRecentLoad }
   // Store observer token for proper cleanup
   private var settingsObserver: NSObjectProtocol?
+  private var performanceObserver: NSObjectProtocol?
   /// The launch spec of the currently running server, so settings changes can
   /// decide whether a full restart is needed (spec changed) or a surgical
   /// in-place reload suffices (spec unchanged, only models.ini content changed).
@@ -231,11 +232,29 @@ class LlamaServer {
         self?.handleSettingsChange()
       }
     }
+
+    // Performance changes rewrite model presets, and a loaded model can't
+    // change its KV cache, batch sizes or context in place. Restart instead of
+    // letting the router unload the resident model and wait for a new request.
+    performanceObserver = NotificationCenter.default.addObserver(
+      forName: .LBPerformanceSettingsDidChange, object: nil, queue: .main
+    ) {
+      [weak self] _ in
+      MainActor.assumeIsolated {
+        // Write the preset even when the server is idle, so the next start
+        // picks up the change instead of waiting for an unrelated model sync.
+        ModelManager.shared.updateModelsFile()
+        self?.reload()
+      }
+    }
   }
 
   deinit {
     if let settingsObserver {
       NotificationCenter.default.removeObserver(settingsObserver)
+    }
+    if let performanceObserver {
+      NotificationCenter.default.removeObserver(performanceObserver)
     }
   }
 

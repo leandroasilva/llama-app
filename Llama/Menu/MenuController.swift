@@ -450,6 +450,9 @@ final class MenuController: NSObject, NSMenuDelegate {
     // User settings changed - rebuild menu
     observe(.LBUserSettingsDidChange, rebuildMenu: true)
 
+    // Performance settings affect the context labels and memory figures.
+    observe(.LBPerformanceSettingsDidChange, rebuildMenu: true)
+
     // A background flow (e.g. DeeplinkHandler) wants to surface a hint bubble.
     observe(.LBShowMenuHint) { [weak self] note in
       guard let msg = note.userInfo?["message"] as? String else { return }
@@ -664,8 +667,7 @@ final class MenuController: NSObject, NSMenuDelegate {
       showTags: showTags
     )
     menu.addItem(NSMenuItem.viewItem(with: header))
-    menu.addItem(NSMenuItem.viewItem(with: ExpandedModelDetailsView(
-      model: model, server: server)))
+    menu.addItem(NSMenuItem.viewItem(with: ExpandedModelDetailsView(model: model)))
 
     // Page actions as labeled menu rows -- bezel buttons read as dialog chrome
     // inside a menu and gray out whenever the app isn't frontmost. Chat leads

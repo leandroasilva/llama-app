@@ -151,7 +151,8 @@ extension Model {
   }
 
   /// The effective context tier for this model.
-  /// Returns user's selection if set and still compatible, otherwise 4K.
+  /// Returns the user's selection if set and still compatible, otherwise the
+  /// largest fitting tier or 4K according to `UserSettings.contextLengthPolicy`.
   var effectiveCtxTier: ContextTier? {
     var args: [String: Any] = [
       "ctxWindow": ctxWindow,
@@ -159,6 +160,7 @@ extension Model {
       "ctxBytesPer1kTokens": ctxBytesPer1kTokens,
       "residentBytes": residentBytes,
       "budgetMb": Self.deviceMemoryBudgetMb,
+      "preferLargest": UserSettings.contextLengthPolicy == .largestFitting,
     ]
     if let selected = UserSettings.selectedCtxTier(for: id) {
       args["selected"] = selected.rawValue

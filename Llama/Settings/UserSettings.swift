@@ -54,7 +54,9 @@ enum UserSettings {
     static let globalInputShortcut = "globalInputShortcut"
     static let customWebUIDirectory = "customWebUIDirectory"
     static let modelAliases = "modelAliases"
-    static let agentModelID = "agentModelID"
+    static let performanceConfig = "performanceConfig"
+    static let modelPerformanceOverrides = "modelPerformanceOverrides"
+    static let contextLengthPolicy = "contextLengthPolicy"
   }
 
   private static let defaults = UserDefaults.standard
@@ -106,8 +108,7 @@ enum UserSettings {
   }
 
   /// Whether a model may use the whole GPU working set, rather than leaving
-  /// llama.cpp's fit slack unspent. Off unless explicitly set:
-  ///   `defaults write app.llama.Llama useFullWorkingSet -bool true`
+  /// llama.cpp's fit slack unspent. Off by default.
   ///
   /// Worth a gigabyte, which is the difference for a model that lands just
   /// over the default line -- a 20B MXFP4 model on a 16 GB Mac, say. The slack
@@ -124,11 +125,13 @@ enum UserSettings {
   ///
   /// It does nothing on an 8 GB Mac, where the RAM floor governs either way --
   /// pushing past it there wedges the machine rather than merely slowing it.
-  ///
-  /// Undocumented on purpose: it's a probe. If people keep asking for it, that
-  /// argues for a real affordance; silence argues for leaving it alone.
   static var useFullWorkingSet: Bool {
-    defaults.bool(forKey: Keys.useFullWorkingSet)
+    get { defaults.bool(forKey: Keys.useFullWorkingSet) }
+    set {
+      guard newValue != useFullWorkingSet else { return }
+      defaults.set(newValue, forKey: Keys.useFullWorkingSet)
+      NotificationCenter.default.post(name: .LBUserSettingsDidChange, object: nil)
+    }
   }
 
   /// The key combo that opens the global-input capture panel, or `nil` when no
@@ -384,14 +387,6 @@ enum UserSettings {
     }
   }
 
-  /// The installed model used in the copied agent configurations, or `nil`
-  /// when the user hasn't picked one yet. Callers re-validate it against the
-  /// installed set, since a model can be deleted between launches.
-  static var agentModelID: String? {
-    get { defaults.string(forKey: Keys.agentModelID) }
-    set { defaults.set(newValue, forKey: Keys.agentModelID) }
-  }
-
   // MARK: - Custom Web App
 
   /// A folder the server serves at `/` in place of the built-in web UI
@@ -498,10 +493,89 @@ enum UserSettings {
     return result
   }
 
+  // MARK: - Performance
+
+  /// Global llama.cpp memory settings, used for every model that doesn't have
+  /// its own override. Written into the `[*]` section of `models.ini`.
+  static var performanceConfig: PerformanceConfig {
+    get {
+      guard let data = defaults.data(forKey: Keys.performanceConfig),
+        let config = try? JSONDecoder().decode(PerformanceConfig.self, from: data)
+      else { return .default }
+      return config.normalized
+    }
+    set {
+      let normalized = newValue.normalized
+      guard normalized != performanceConfig else { return }
+      guard let data = try? JSONEncoder().encode(normalized) else { return }
+      defaults.set(data, forKey: Keys.performanceConfig)
+      NotificationCenter.default.post(name: .LBPerformanceSettingsDidChange, object: nil)
+    }
+  }
+
+  /// The memory settings a model actually uses: its own override when present,
+  /// otherwise the global defaults.
+  static func performanceConfig(for modelId: String) -> PerformanceConfig {
+    guard let data = modelPerformanceOverrides[modelId],
+      let config = try? JSONDecoder().decode(PerformanceConfig.self, from: data)
+    else { return performanceConfig }
+    return config.normalized
+  }
+
+  /// Whether `modelId` has its own memory settings instead of following the
+  /// global defaults.
+  static func hasPerformanceOverride(for modelId: String) -> Bool {
+    guard let data = modelPerformanceOverrides[modelId] else { return false }
+    return (try? JSONDecoder().decode(PerformanceConfig.self, from: data)) != nil
+  }
+
+  /// Saves or clears a per-model memory override. Passing nil makes the model
+  /// follow the global defaults again.
+  static func setPerformanceConfig(_ config: PerformanceConfig?, for modelId: String) {
+    var overrides = modelPerformanceOverrides
+    let currentData = overrides[modelId]
+    let current = currentData.flatMap {
+      try? JSONDecoder().decode(PerformanceConfig.self, from: $0)
+    }
+
+    if let config {
+      let normalized = config.normalized
+      guard normalized != current || currentData == nil else { return }
+      guard let data = try? JSONEncoder().encode(normalized) else { return }
+      overrides[modelId] = data
+    } else {
+      guard currentData != nil else { return }
+      overrides.removeValue(forKey: modelId)
+    }
+
+    defaults.set(overrides, forKey: Keys.modelPerformanceOverrides)
+    NotificationCenter.default.post(name: .LBPerformanceSettingsDidChange, object: nil)
+  }
+
+  private static var modelPerformanceOverrides: [String: Data] {
+    defaults.dictionary(forKey: Keys.modelPerformanceOverrides) as? [String: Data] ?? [:]
+  }
+
+  /// What to do when a model has no explicit context tier. The default is the
+  /// largest tier that fits this Mac.
+  static var contextLengthPolicy: ContextLengthPolicy {
+    get {
+      guard let raw = defaults.string(forKey: Keys.contextLengthPolicy),
+        let policy = ContextLengthPolicy(rawValue: raw)
+      else { return .largestFitting }
+      return policy
+    }
+    set {
+      guard newValue != contextLengthPolicy else { return }
+      defaults.set(newValue.rawValue, forKey: Keys.contextLengthPolicy)
+      NotificationCenter.default.post(name: .LBPerformanceSettingsDidChange, object: nil)
+    }
+  }
+
   // MARK: - Context Tier Preferences
 
   /// Returns the user-selected context tier for a model, or nil if not set.
-  /// When nil, the model should use the default 4K tier.
+  /// When nil, the model follows `contextLengthPolicy`.
   static func selectedCtxTier(for modelId: String) -> ContextTier? {
     guard let dict = defaults.dictionary(forKey: Keys.selectedCtxTiers),
       let rawValue = dict[modelId] as? Int
@@ -510,8 +584,9 @@ enum UserSettings {
   }
 
   /// Sets the user-selected context tier for a model.
-  /// Pass nil to clear the preference and use the default (4K).
+  /// Pass nil to clear the preference and follow `contextLengthPolicy`.
   static func setSelectedCtxTier(_ tier: ContextTier?, for modelId: String) {
+    guard tier != selectedCtxTier(for: modelId) else { return }
     var dict = defaults.dictionary(forKey: Keys.selectedCtxTiers) ?? [:]
     if let tier {
       dict[modelId] = tier.rawValue
@@ -519,7 +594,7 @@ enum UserSettings {
       dict.removeValue(forKey: modelId)
     }
     defaults.set(dict, forKey: Keys.selectedCtxTiers)
-    NotificationCenter.default.post(name: .LBUserSettingsDidChange, object: nil)
+    NotificationCenter.default.post(name: .LBPerformanceSettingsDidChange, object: nil)
   }
 
   // MARK: - Application Support Directory

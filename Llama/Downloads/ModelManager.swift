@@ -568,8 +568,14 @@ class ModelManager: NSObject, URLSessionDataDelegate {
   private func generatedModelSections() -> [UserModelOverrides.Section] {
     var sections: [UserModelOverrides.Section] = []
 
-    // Enable larger batch size for better performance on high-memory devices (>=32 GB RAM)
-    let useLargeBatch = Double(SystemMemory.memoryMb) / 1024.0 >= 32.0
+    // Global llama.cpp memory defaults. A model section only repeats these
+    // when the user gave that model its own values.
+    let globalPerformance = UserSettings.performanceConfig
+    var globalSection = UserModelOverrides.Section(name: "*", pairs: [])
+    for (key, value) in globalPerformance.iniPairs {
+      globalSection.set(key, value)
+    }
+    sections.append(globalSection)
 
     for model in downloadedModels {
       // Use the effective tier (user selection or max compatible)
@@ -601,8 +607,11 @@ class ModelManager: NSObject, URLSessionDataDelegate {
         section.set("spec-draft-n-max", "\(draftKind.draftNMax)")
       }
 
-      if useLargeBatch {
-        section.set("ubatch-size", "2048")
+      let modelPerformance = UserSettings.performanceConfig(for: model.id)
+      if modelPerformance != globalPerformance {
+        for (key, value) in modelPerformance.iniPairs {
+          section.set(key, value)
+        }
       }
 
       // What kind of model this is, for clients reading `/v1/models`: the

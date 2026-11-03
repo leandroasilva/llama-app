@@ -211,11 +211,13 @@ impl ModelMem {
         tiers
     }
 
-    /// The effective context tier: the still-compatible saved selection, else 4K.
+    /// The effective context tier: the still-compatible saved selection, else
+    /// the largest fitting tier or 4K depending on the host's policy.
     pub fn effective_ctx_tier(
         &self,
         budget_mb: f64,
         selected: Option<ContextTier>,
+        prefer_largest: bool,
     ) -> Option<ContextTier> {
         let supported = self.supported_context_tiers(budget_mb);
         if supported.is_empty() {
@@ -226,6 +228,50 @@ impl ModelMem {
                 return Some(sel);
             }
         }
+        if prefer_largest {
+            return supported.last().copied();
+        }
         Some(ContextTier::K4)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn model() -> ModelMem {
+        ModelMem {
+            ctx_window: ContextTier::K256.raw_value(),
+            file_size: 4 * 1024 * 1024 * 1024,
+            ctx_bytes_per_1k_tokens: 1024 * 1024,
+            resident_bytes: 0,
+        }
+    }
+
+    #[test]
+    fn effective_tier_follows_the_selection_first() {
+        let m = model();
+        assert_eq!(
+            m.effective_ctx_tier(10_000.0, Some(ContextTier::K32), true),
+            Some(ContextTier::K32)
+        );
+    }
+
+    #[test]
+    fn effective_tier_prefers_largest_when_requested() {
+        let m = model();
+        assert_eq!(
+            m.effective_ctx_tier(10_000.0, None, true),
+            Some(ContextTier::K256)
+        );
+    }
+
+    #[test]
+    fn effective_tier_keeps_the_minimum_by_default() {
+        let m = model();
+        assert_eq!(
+            m.effective_ctx_tier(10_000.0, None, false),
+            Some(ContextTier::K4)
+        );
     }
 }
