@@ -48,6 +48,54 @@ jobs:
       - name: cargo test
         run: cargo test --all
 
+
+  linux-gtk-check:
+    name: Linux GTK — fmt, clippy, build
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install GTK and TLS dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            libgtk-4-dev \
+            libssl-dev \
+            pkg-config
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            llama-gtk/target/
+          key: ${{ runner.os }}-cargo-gtk-${{ hashFiles('llama-gtk/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-gtk-
+
+      - name: cargo fmt
+        run: cargo fmt --manifest-path llama-gtk/Cargo.toml -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --manifest-path llama-gtk/Cargo.toml --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --manifest-path llama-gtk/Cargo.toml
+
+      - name: cargo build
+        run: cargo build --manifest-path llama-gtk/Cargo.toml
+
   swift-build:
     name: Swift — build + test
     runs-on: macos-15

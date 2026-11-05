@@ -15,5 +15,6 @@ xcuserdata
 
 # Rust
 /target
+llama-gtk/target
 
 ref

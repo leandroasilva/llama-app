@@ -1,5 +1,13 @@
 {
   "version": "b12005",
   "sha256": "98b553ca5e3f96a4c9427b1357769db13f34687b181858e38e4284399c9ab0e7",
-  "channel": "preview"
+  "channel": "preview",
+  "artifacts": {
+    "macos-aarch64": "98b553ca5e3f96a4c9427b1357769db13f34687b181858e38e4284399c9ab0e7",
+    "macos-x86_64": "a1ea702079cccf45d9a482c29f9f732ed8a0bd5afc2e40fcec550672b2f9d5be",
+    "linux-cpu-aarch64": "a467ff69f0f9be4df60740cdb8248319843ea36e35f0691d8b61c56741860979",
+    "linux-cpu-x86_64": "fca5e36156c4b6d0eebd98ae807d8baad7684f50c14425cca67cccc94de722f1",
+    "linux-vulkan-aarch64": "dbb907a07bbc8eee05442002b2626bfb0fee20d816463cda2f4f8d24c5034d69",
+    "linux-vulkan-x86_64": "c8e6d46c8eb65ea87f8ac7c2e2b4276139f5593845b2130a3a8b0d0cb6b24e0e"
+  }
 }

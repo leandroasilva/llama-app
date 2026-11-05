@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["llama-core", "llama-core-ffi"]
+exclude = ["llama-gtk"]
 
 # Standard release tuning for a staticlib that is linked into a signed app.
 # `panic` is left as the default (unwind) on purpose: the FFI boundary wraps

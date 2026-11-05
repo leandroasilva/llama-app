@@ -70,8 +70,11 @@ pub fn metal_config(brand: &str) -> Result<String, InstallError> {
 }
 
 /// The official macOS Apple Silicon release archive URL.
+///
+/// Kept as the macOS host's stable entry point; platform-specific callers use
+/// [`super::platform::artifact_for`] for Linux and Intel Macs.
 pub fn artifact_url(version: &str) -> String {
-    format!("{RELEASE_BASE}/{version}/llama-{version}-bin-macos-arm64.tar.gz")
+    super::platform::artifact_url(version, super::platform::Target::MacOSAarch64)
 }
 
 /// The standalone `unzstd` helper URL (macOS ships no zstd).

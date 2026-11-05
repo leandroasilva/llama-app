@@ -80,8 +80,12 @@ pub fn is_homebrew(path: &str) -> bool {
 #[serde(rename_all = "camelCase")]
 pub struct TargetRelease {
     pub version: String,
+    /// macOS arm64 digest, kept at the top level for the existing Swift host.
     pub sha256: String,
     pub channel: String,
+    /// Digest per `Target::key` for every archive the app may install.
+    #[serde(default)]
+    pub artifacts: Option<std::collections::BTreeMap<String, String>>,
 }
 
 pub fn target_release() -> TargetRelease {

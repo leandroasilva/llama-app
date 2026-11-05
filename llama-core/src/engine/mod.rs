@@ -3,6 +3,7 @@ pub mod download;
 pub mod installer;
 pub mod mem_profile;
 pub mod partial_writer;
+pub mod platform;
 pub mod server;
 pub mod version;
 
