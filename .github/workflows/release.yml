@@ -16,6 +16,9 @@ jobs:
   build-and-release:
     name: Build, Sign & Release
     runs-on: macos-15
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
 
     steps:
       - name: Checkout
@@ -284,5 +287,38 @@ jobs:
           files: |
             build/Llama.dmg
             build/appcast.xml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  linux-packages:
+    name: Linux packages (${{ matrix.arch }})
+    needs: build-and-release
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build-and-release.outputs.tag }}
+
+      - name: Build Linux packages
+        env:
+          VERSION: ${{ needs.build-and-release.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: scripts/linux/build-in-docker.sh "$VERSION" "$ARCH" build/linux
+
+      - name: Upload packages to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.build-and-release.outputs.tag }}
+          files: build/linux/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

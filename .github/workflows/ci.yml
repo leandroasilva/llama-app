@@ -57,13 +57,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install GTK and TLS dependencies
+      - name: Install GTK and build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential \
+            cmake \
             libgtk-4-dev \
-            libssl-dev \
             pkg-config
 
       - name: Set up Rust

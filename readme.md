@@ -8,6 +8,16 @@ Llama is a native macOS menu bar app that runs local large language models on yo
 
 Download the latest DMG from [Releases](https://github.com/leandroasilva/llama-app/releases), open it, and drag Llama.app to your Applications folder.
 
+### Linux
+
+Every release also includes Linux packages for the major distributions:
+
+- **Ubuntu 22.04+ / Debian 12+** — `.deb` for `amd64` and `arm64`
+- **Fedora 36+ and compatible RPM distributions** — `.rpm` for `x86_64` and `aarch64`
+- **Arch and other distributions** — portable `.tar.gz` build
+
+The Linux build needs GTK 4.6 or newer and CA certificates. Install the matching package with your distribution's package manager, or extract the tarball and run `llama-gtk`. The GTK frontend covers model management, downloads, engine install, server lifecycle, and settings; macOS-only integrations such as the menu-bar tray, global hotkeys, and Keychain are not available yet.
+
 ## What it does
 
 Llama runs a local OpenAI-compatible API server powered by llama.cpp. When you start the app, it listens on `http://localhost:9931/v1` and stays resident in your menu bar. Models load into memory on demand and unload when idle, so they only consume RAM while you're actively using them.
@@ -156,6 +166,7 @@ defaults delete app.llama.Llama extraServerArgs   # reset
 
 - macOS 15 (Sequoia) or later
 - Apple Silicon (arm64)
+- Linux: GTK 4.6+ and CA certificates (see the Linux packages above)
 
 ## Architecture
 

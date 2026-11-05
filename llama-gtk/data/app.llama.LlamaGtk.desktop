@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Llama
+Comment=Run local language models with llama.cpp
+Exec=llama-gtk
+Icon=app.llama.LlamaGtk
+Terminal=false
+Categories=Development;Utility;
+StartupWMClass=app.llama.LlamaGtk
+Keywords=llama;llm;ai;local;huggingface;

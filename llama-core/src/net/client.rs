@@ -1,9 +1,10 @@
 //! Blocking HTTP transport for the HF API lookup and the metadata HEADs.
 //!
-//! The real client is `reqwest` (native-tls, matching the app's documented TLS
-//! choice). Everything above it depends on the `HttpClient` trait, so tests can
-//! drive the selection/fetch logic against a hand-rolled local server (or a
-//! canned response) without touching the network.
+//! The real client is `reqwest` with the TLS backend selected by the
+//! `native-tls` or `rustls` feature of `llama-core`. Everything above it
+//! depends on the `HttpClient` trait, so tests can drive the selection/fetch
+//! logic against a hand-rolled local server (or a canned response) without
+//! touching the network.
 
 use super::hf_request;
 use super::response::HttpResponse;
