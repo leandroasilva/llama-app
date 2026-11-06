@@ -121,7 +121,6 @@ pub fn download(
 /// never leaves a half-written binary in place. Mirrors
 /// `LlamaInstaller.decompress`.
 pub fn decompress(unzstd: &str, zst: &str, dest: &str) -> Result<(), InstallError> {
-    use std::os::unix::fs::PermissionsExt;
     use std::process::Stdio;
 
     let install_dir = parent_dir(dest);
@@ -156,7 +155,7 @@ pub fn decompress(unzstd: &str, zst: &str, dest: &str) -> Result<(), InstallErro
             )));
         }
 
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))
+        set_executable(std::path::Path::new(&tmp))
             .map_err(|e| InstallError::InstallFailed(e.to_string()))?;
         std::fs::rename(&tmp, dest).map_err(|e| InstallError::InstallFailed(format!("rename: {e}")))
     })();
@@ -170,15 +169,13 @@ pub fn decompress(unzstd: &str, zst: &str, dest: &str) -> Result<(), InstallErro
 /// Copies `src` onto the destination volume, then atomically renames it into
 /// place as an executable. Mirrors `LlamaInstaller.atomicInstall`.
 pub fn atomic_install(src: &str, dest: &str) -> Result<(), InstallError> {
-    use std::os::unix::fs::PermissionsExt;
-
     std::fs::create_dir_all(parent_dir(dest))
         .map_err(|e| InstallError::InstallFailed(e.to_string()))?;
 
     let tmp = format!("{dest}.tmp-{}", unique_suffix());
     let saw_error: Result<(), InstallError> = (|| {
         std::fs::copy(src, &tmp).map_err(|e| InstallError::InstallFailed(format!("copy: {e}")))?;
-        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))
+        set_executable(std::path::Path::new(&tmp))
             .map_err(|e| InstallError::InstallFailed(e.to_string()))?;
         std::fs::rename(&tmp, dest)
             .map_err(|e| InstallError::InstallFailed(format!("rename {dest}: {e}")))
@@ -198,10 +195,13 @@ pub fn atomic_install(src: &str, dest: &str) -> Result<(), InstallError> {
 pub enum PathSymlinkOutcome {
     Linked,
     LeftExisting,
+    /// Windows has no `~/.local/bin`; the app-managed path is used directly.
+    Unsupported,
     Failed(String),
 }
 
 /// Mirrors `LlamaInstaller.linkOnPath` with the home directory injected.
+#[cfg(unix)]
 pub fn ensure_path_symlink(home: &str, llama_path: &str) -> PathSymlinkOutcome {
     let symlink_dir = format!("{}/.local/bin", home.trim_end_matches('/'));
     let symlink_path = format!("{symlink_dir}/llama");
@@ -224,6 +224,11 @@ pub fn ensure_path_symlink(home: &str, llama_path: &str) -> PathSymlinkOutcome {
         Ok(()) => PathSymlinkOutcome::Linked,
         Err(e) => PathSymlinkOutcome::Failed(e.to_string()),
     }
+}
+
+#[cfg(windows)]
+pub fn ensure_path_symlink(_home: &str, _llama_path: &str) -> PathSymlinkOutcome {
+    PathSymlinkOutcome::Unsupported
 }
 
 /// Outcome of a staged-binary promotion.
@@ -265,6 +270,8 @@ pub fn promote_staged(
         return PromoteOutcome::Failed(e.to_string());
     }
 
+    #[cfg(windows)]
+    let _ = std::fs::remove_file(live);
     match std::fs::rename(staged, live) {
         Ok(()) => {
             let _ = ensure_path_symlink(home, live);
@@ -278,10 +285,22 @@ pub fn promote_staged(
 }
 
 fn parent_dir(path: &str) -> String {
-    match path.rfind('/') {
-        Some(i) if i > 0 => path[..i].to_string(),
-        _ => ".".to_string(),
-    }
+    std::path::Path::new(path)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| ".".to_string())
+}
+
+#[cfg(unix)]
+fn set_executable(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+}
+
+#[cfg(windows)]
+fn set_executable(_path: &std::path::Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 fn prefix(s: &str, n: usize) -> String {

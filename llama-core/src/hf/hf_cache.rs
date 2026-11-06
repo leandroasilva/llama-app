@@ -185,9 +185,14 @@ impl HFCache {
 
     /// Writes a downloaded file into the HF cache layout.
     ///
-    /// 1. Creates directory structure (`blobs/`, `snapshots/{commit}/`, `refs/`)
-    /// 2. Moves temp file → `blobs/{sha256}`
-    /// 3. Creates symlink `snapshots/{commit}/{filename}` → `../../blobs/{sha256}`
+    /// On Unix the file lives in `blobs/{sha256}` and the snapshot entry is a
+    /// relative symlink. Windows may not allow symlinks without Developer Mode,
+    /// so the completed file is moved directly into the snapshot instead; the
+    /// scan/delete paths already handle regular snapshot files.
+    ///
+    /// 1. Creates directory structure (`snapshots/{commit}/`, `refs/`)
+    /// 2. Moves temp file → `blobs/{sha256}` (Unix) or the snapshot (Windows)
+    /// 3. Creates the snapshot entry
     /// 4. Writes `refs/main` with the commit hash
     pub fn write_blob_and_link(
         cache_dir: &str,
@@ -198,37 +203,47 @@ impl HFCache {
         temp_file: &str,
     ) -> io::Result<()> {
         let repo_base = Path::new(cache_dir).join(repo_dir);
-        let blobs_dir = repo_base.join("blobs");
         let snapshot_dir = repo_base.join("snapshots").join(commit);
         let refs_dir = repo_base.join("refs");
 
-        fs::create_dir_all(&blobs_dir)?;
         fs::create_dir_all(&snapshot_dir)?;
         fs::create_dir_all(&refs_dir)?;
 
-        // Move temp file to blob (atomic within same filesystem). If the blob
-        // already exists (identical content from a concurrent download), just
-        // clean up temp.
-        let blob_dest = blobs_dir.join(blob_hash);
-        if blob_dest.exists() {
-            let _ = fs::remove_file(temp_file);
-        } else {
-            fs::rename(temp_file, &blob_dest)?;
-        }
-
-        // Create symlink: snapshots/{commit}/{filename} → ../../blobs/{sha256}
-        // `filename` is repo-relative and may contain a subdir; the relative
-        // target needs one extra `..` per extra path component.
-        let symlink_path = snapshot_dir.join(filename);
-        if let Some(parent) = symlink_path.parent() {
+        let snapshot_path = snapshot_dir.join(filename);
+        if let Some(parent) = snapshot_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        if symlink_path.exists() || fs::read_link(&symlink_path).is_ok() {
-            let _ = fs::remove_file(&symlink_path);
+        if snapshot_path.exists() || fs::read_link(&snapshot_path).is_ok() {
+            let _ = fs::remove_file(&snapshot_path);
         }
-        let depth = filename.split('/').count().saturating_sub(1);
-        let relative_target = format!("{}blobs/{}", "../".repeat(2 + depth), blob_hash);
-        std::os::unix::fs::symlink(relative_target, &symlink_path)?;
+
+        #[cfg(unix)]
+        {
+            let blobs_dir = repo_base.join("blobs");
+            fs::create_dir_all(&blobs_dir)?;
+
+            // Move temp file to blob (atomic within same filesystem). If the blob
+            // already exists (identical content from a concurrent download), just
+            // clean up temp.
+            let blob_dest = blobs_dir.join(blob_hash);
+            if blob_dest.exists() {
+                let _ = fs::remove_file(temp_file);
+            } else {
+                fs::rename(temp_file, &blob_dest)?;
+            }
+
+            // `filename` is repo-relative and may contain a subdir; the relative
+            // target needs one extra `..` per extra path component.
+            let depth = filename.split('/').count().saturating_sub(1);
+            let relative_target = format!("{}blobs/{}", "../".repeat(2 + depth), blob_hash);
+            std::os::unix::fs::symlink(relative_target, &snapshot_path)?;
+        }
+
+        #[cfg(windows)]
+        {
+            let _ = blob_hash;
+            fs::rename(temp_file, &snapshot_path)?;
+        }
 
         // Write refs/main with the commit hash.
         fs::write(refs_dir.join("main"), commit)?;

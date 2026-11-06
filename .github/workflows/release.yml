@@ -322,3 +322,68 @@ jobs:
           files: build/linux/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  windows-package:
+    name: Windows package (x86_64)
+    needs: build-and-release
+    runs-on: windows-latest
+    env:
+      PKG_CONFIG_PATH: /mingw64/lib/pkgconfig
+      CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: x86_64-w64-mingw32-gcc
+      CMAKE_GENERATOR: Ninja
+      CMAKE_C_COMPILER: x86_64-w64-mingw32-gcc
+      CMAKE_CXX_COMPILER: x86_64-w64-mingw32-g++
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build-and-release.outputs.tag }}
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.98.0"
+          targets: x86_64-pc-windows-gnu
+
+      - name: Set up MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-gtk4
+            mingw-w64-x86_64-nasm
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-pkgconf
+            zip
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            llama-gtk/target/
+          key: ${{ runner.os }}-cargo-release-gtk-${{ hashFiles('llama-gtk/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-release-gtk-
+
+      - name: Build Windows package
+        shell: msys2 {0}
+        env:
+          VERSION: ${{ needs.build-and-release.outputs.version }}
+        run: |
+          export PATH="/c/Users/runneradmin/.cargo/bin:/mingw64/bin:/usr/bin:/bin"
+          bash scripts/windows/package.sh "$VERSION" build/windows
+
+      - name: Upload package to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.build-and-release.outputs.tag }}
+          files: build/windows/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

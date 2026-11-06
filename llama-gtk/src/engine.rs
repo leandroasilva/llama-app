@@ -2,6 +2,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[cfg(unix)]
 use flate2::read::GzDecoder;
 use llama_core::engine::binaries;
 use llama_core::engine::installer;
@@ -11,7 +12,7 @@ use sha2::{Digest, Sha256};
 
 use crate::paths;
 
-pub const USER_AGENT: &str = "llama-app/0.1 (Linux; llama-gtk)";
+pub const USER_AGENT: &str = "llama-app/0.1 (llama-gtk)";
 
 #[derive(Debug, Clone)]
 pub struct Engine {
@@ -22,11 +23,14 @@ pub struct Engine {
 
 pub fn resolve_engine() -> Option<Engine> {
     let home = paths::home_dir();
+    #[cfg(unix)]
     let dirs = vec![
         home.join(".local/bin").to_string_lossy().into_owned(),
         "/usr/local/bin".into(),
         "/usr/bin".into(),
     ];
+    #[cfg(windows)]
+    let dirs: Vec<String> = Vec::new();
     let (path, origin) = binaries::resolve(&home.to_string_lossy(), &dirs, false)?;
     let version = binaries::read_version(&path);
     Some(Engine {
@@ -48,7 +52,9 @@ pub fn target_for_backend(backend: &str) -> Result<Target, String> {
             std::env::consts::ARCH
         )
     })?;
-    platform::target_for(TargetOs::Linux, arch, backend)
+    let os = TargetOs::current()
+        .ok_or_else(|| "No prebuilt llama.cpp archive for this platform.".to_string())?;
+    platform::target_for(os, arch, backend)
         .ok_or_else(|| "No prebuilt llama.cpp archive for this platform.".to_string())
 }
 
@@ -78,8 +84,12 @@ pub fn install(
 
     let result = (|| -> Result<String, String> {
         extract(&archive, &staging)?;
-        let bundle = staging.join(&artifact.bundle_name);
-        let binary = bundle.join("llama");
+        let bundle = if artifact.bundle_name.is_empty() {
+            staging.clone()
+        } else {
+            staging.join(&artifact.bundle_name)
+        };
+        let binary = bundle.join(binaries::BINARY_NAME);
         if !binaries::is_executable_file(&binary.to_string_lossy()) {
             return Err("The llama.cpp release archive is incomplete.".into());
         }
@@ -98,15 +108,22 @@ pub fn install(
         std::fs::rename(&bundle, &destination)
             .map_err(|e| format!("Couldn't move the release into place: {e}"))?;
 
-        let live = install_dir.join("llama");
-        let release_binary = destination.join("llama");
+        let live = install_dir.join(binaries::BINARY_NAME);
+        let release_binary = destination.join(binaries::BINARY_NAME);
         point_link(&live, &release_binary)?;
         if let installer::PathSymlinkOutcome::Failed(e) =
             installer::ensure_path_symlink(&home.to_string_lossy(), &live.to_string_lossy())
         {
-            eprintln!("Couldn't create ~/.local/bin/llama: {e}");
+            eprintln!("Couldn't create the PATH link for llama: {e}");
         }
-        Ok(release_binary.to_string_lossy().into_owned())
+        #[cfg(windows)]
+        {
+            Ok(live.to_string_lossy().into_owned())
+        }
+        #[cfg(not(windows))]
+        {
+            Ok(release_binary.to_string_lossy().into_owned())
+        }
     })();
 
     let _ = std::fs::remove_dir_all(&staging);
@@ -167,6 +184,7 @@ fn download_archive(
     std::fs::rename(&tmp, dest).map_err(|e| e.to_string())
 }
 
+#[cfg(unix)]
 fn extract(archive: &Path, staging: &Path) -> Result<(), String> {
     let file = std::fs::File::open(archive).map_err(|e| e.to_string())?;
     let gz = GzDecoder::new(file);
@@ -175,6 +193,16 @@ fn extract(archive: &Path, staging: &Path) -> Result<(), String> {
         .map_err(|e| format!("Couldn't unpack the llama.cpp archive: {e}"))
 }
 
+#[cfg(windows)]
+fn extract(archive: &Path, staging: &Path) -> Result<(), String> {
+    let file = std::fs::File::open(archive).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipArchive::new(file)
+        .map_err(|e| format!("Couldn't open the llama.cpp ZIP archive: {e}"))?;
+    zip.extract(staging)
+        .map_err(|e| format!("Couldn't unpack the llama.cpp archive: {e}"))
+}
+
+#[cfg(unix)]
 fn point_link(link: &Path, binary: &Path) -> Result<(), String> {
     let parent = link.parent().ok_or("invalid install path")?;
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -185,6 +213,24 @@ fn point_link(link: &Path, binary: &Path) -> Result<(), String> {
         let _ = std::fs::remove_file(&tmp);
         e.to_string()
     })
+}
+
+/// Windows cannot create symlinks without Developer Mode/administrator. Copy
+/// the whole flat release bundle (the executable plus its DLLs) beside the
+/// managed `llama.exe` path so the loader finds them without PATH tricks.
+#[cfg(windows)]
+fn point_link(link: &Path, binary: &Path) -> Result<(), String> {
+    let source = binary.parent().ok_or("invalid install path")?;
+    let parent = link.parent().ok_or("invalid install path")?;
+    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    for entry in std::fs::read_dir(source).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if entry.file_type().map_err(|e| e.to_string())?.is_file() {
+            std::fs::copy(entry.path(), parent.join(entry.file_name()))
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 pub fn library_dir(engine_path: &str) -> Option<PathBuf> {

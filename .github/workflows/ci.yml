@@ -96,6 +96,77 @@ jobs:
       - name: cargo build
         run: cargo build --manifest-path llama-gtk/Cargo.toml
 
+  windows-gtk-check:
+    name: Windows GTK — fmt, clippy, test, package
+    runs-on: windows-latest
+    env:
+      PKG_CONFIG_PATH: /mingw64/lib/pkgconfig
+      CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: x86_64-w64-mingw32-gcc
+      CMAKE_GENERATOR: Ninja
+      CMAKE_C_COMPILER: x86_64-w64-mingw32-gcc
+      CMAKE_CXX_COMPILER: x86_64-w64-mingw32-g++
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: x86_64-pc-windows-gnu
+          components: rustfmt, clippy
+
+      - name: Set up MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-gtk4
+            mingw-w64-x86_64-nasm
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-pkgconf
+            zip
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            llama-gtk/target/
+          key: ${{ runner.os }}-cargo-gtk-${{ hashFiles('llama-gtk/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-gtk-
+
+      - name: cargo fmt
+        shell: msys2 {0}
+        run: |
+          export PATH="/c/Users/runneradmin/.cargo/bin:/mingw64/bin:/usr/bin:/bin"
+          cargo fmt --manifest-path llama-gtk/Cargo.toml -- --check
+
+      - name: cargo clippy
+        shell: msys2 {0}
+        run: |
+          export PATH="/c/Users/runneradmin/.cargo/bin:/mingw64/bin:/usr/bin:/bin"
+          cargo clippy --manifest-path llama-gtk/Cargo.toml --target x86_64-pc-windows-gnu --all-targets -- -D warnings
+
+      - name: cargo test
+        shell: msys2 {0}
+        run: |
+          export PATH="/c/Users/runneradmin/.cargo/bin:/mingw64/bin:/usr/bin:/bin"
+          cargo test --manifest-path llama-gtk/Cargo.toml --target x86_64-pc-windows-gnu
+
+      - name: Package portable ZIP
+        shell: msys2 {0}
+        run: |
+          export PATH="/c/Users/runneradmin/.cargo/bin:/mingw64/bin:/usr/bin:/bin"
+          bash scripts/windows/package.sh 0.0.0 build/windows
+
   swift-build:
     name: Swift — build + test
     runs-on: macos-15

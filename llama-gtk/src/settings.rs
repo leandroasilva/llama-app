@@ -182,12 +182,19 @@ impl Settings {
     }
 }
 
+#[cfg(unix)]
 fn set_private(path: &std::path::Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
         .map_err(|e| e.to_string())
 }
 
+#[cfg(windows)]
+fn set_private(_path: &std::path::Path) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(unix)]
 fn random_hex_32() -> String {
     let mut bytes = [0u8; 32];
     if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
@@ -196,15 +203,49 @@ fn random_hex_32() -> String {
             return llama_core::engine::partial_writer::hex(&bytes);
         }
     }
-    format!(
-        "{}-{}-{}",
+    fallback_hex_32()
+}
+
+#[cfg(windows)]
+fn random_hex_32() -> String {
+    use std::ffi::c_void;
+
+    #[link(name = "bcrypt")]
+    unsafe extern "system" {
+        fn BCryptGenRandom(algorithm: *mut c_void, buffer: *mut u8, length: u32, flags: u32)
+            -> i32;
+    }
+
+    const BCRYPT_USE_SYSTEM_PREFERRED_RNG: u32 = 0x0000_0002;
+    let mut bytes = [0u8; 32];
+    let status = unsafe {
+        BCryptGenRandom(
+            std::ptr::null_mut(),
+            bytes.as_mut_ptr(),
+            bytes.len() as u32,
+            BCRYPT_USE_SYSTEM_PREFERRED_RNG,
+        )
+    };
+    if status == 0 {
+        return llama_core::engine::partial_writer::hex(&bytes);
+    }
+    fallback_hex_32()
+}
+
+fn fallback_hex_32() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let input = format!(
+        "{}:{}:{}",
         std::process::id(),
-        std::time::SystemTime::now()
-            .elapsed()
-            .unwrap_or_default()
-            .as_nanos(),
-        0
-    )
+        nanos,
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    );
+    llama_core::engine::partial_writer::sha256_hex(input.as_bytes())
 }
 
 #[cfg(test)]

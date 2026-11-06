@@ -9,12 +9,26 @@
 use super::version::LlamaVersion;
 
 /// The app-managed stable executable path, relative to the user's home
-/// directory. It is an atomically switched symlink to a versioned release bundle.
+/// directory. On Unix it is a symlink to a versioned release bundle; on Windows
+/// it is a copy of the executable next to its DLLs.
+#[cfg(unix)]
 const MANAGED_RELATIVE: &str = ".llama-app/llama";
+#[cfg(windows)]
+const MANAGED_RELATIVE: &str = ".llama-app/llama.exe";
+
+/// The engine executable's file name.
+#[cfg(unix)]
+pub const BINARY_NAME: &str = "llama";
+#[cfg(windows)]
+pub const BINARY_NAME: &str = "llama.exe";
 
 /// Unmanaged locations to probe when the app hasn't installed its own binary.
-/// Covers the Homebrew bin dirs (Apple Silicon and Intel).
+/// Covers the Homebrew bin dirs (Apple Silicon and Intel). Windows relies on the
+/// app-managed install only.
+#[cfg(unix)]
 pub const UNMANAGED_DIRS: [&str; 2] = ["/opt/homebrew/bin", "/usr/local/bin"];
+#[cfg(windows)]
+pub const UNMANAGED_DIRS: [&str; 0] = [];
 
 /// Where the in-use binary comes from. Only `managed` is the app's to update;
 /// `brew` and `external` are both used as-is and never modified.
@@ -41,8 +55,17 @@ pub fn managed_path(home: &str) -> String {
     join(home, MANAGED_RELATIVE)
 }
 
-/// Joins a base and a relative path with a single `/`, ignoring a trailing
-/// slash on the base (like Foundation's `appendingPathComponent`).
+/// Joins a base and a relative path with a single separator, ignoring a
+/// trailing slash on the base (like Foundation's `appendingPathComponent`).
+#[cfg(windows)]
+fn join(base: &str, relative: &str) -> String {
+    std::path::Path::new(base)
+        .join(relative)
+        .to_string_lossy()
+        .into_owned()
+}
+
+#[cfg(not(windows))]
 fn join(base: &str, relative: &str) -> String {
     if base == "/" {
         return format!("/{}", relative.trim_start_matches('/'));
@@ -55,12 +78,20 @@ fn join(base: &str, relative: &str) -> String {
     }
 }
 
-/// Whether `path` is executable (has any execute bit set). Mirrors
-/// `FileManager.isExecutableFile(atPath:)`.
+/// Whether `path` is executable. On Unix this checks any execute bit; Windows
+/// has no execute bit, so a regular file is enough (`llama.exe`).
+#[cfg(unix)]
 pub fn is_executable_file(path: &str) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(path)
         .map(|m| m.is_file() && (m.permissions().mode() & 0o111) != 0)
+        .unwrap_or(false)
+}
+
+#[cfg(windows)]
+pub fn is_executable_file(path: &str) -> bool {
+    std::fs::metadata(path)
+        .map(|m| m.is_file())
         .unwrap_or(false)
 }
 
@@ -121,7 +152,7 @@ pub fn resolve(
     }
 
     for dir in unmanaged_dirs {
-        let path = join(dir, "llama");
+        let path = join(dir, BINARY_NAME);
         if is_executable_file(&path) {
             let origin = if is_homebrew(&path) {
                 Origin::Brew

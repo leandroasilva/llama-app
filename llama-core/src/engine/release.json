@@ -8,6 +8,8 @@
     "linux-cpu-aarch64": "a467ff69f0f9be4df60740cdb8248319843ea36e35f0691d8b61c56741860979",
     "linux-cpu-x86_64": "fca5e36156c4b6d0eebd98ae807d8baad7684f50c14425cca67cccc94de722f1",
     "linux-vulkan-aarch64": "dbb907a07bbc8eee05442002b2626bfb0fee20d816463cda2f4f8d24c5034d69",
-    "linux-vulkan-x86_64": "c8e6d46c8eb65ea87f8ac7c2e2b4276139f5593845b2130a3a8b0d0cb6b24e0e"
+    "linux-vulkan-x86_64": "c8e6d46c8eb65ea87f8ac7c2e2b4276139f5593845b2130a3a8b0d0cb6b24e0e",
+    "windows-cpu-x86_64": "96a257d50cd6fff66a884de562a3da595ffb9288e2eacad1b3e6804224a2aded",
+    "windows-vulkan-x86_64": "e96b7cf72034ad8ca2be474f6ddd565519931b10ac48f0c1a0fae7e7288525f4"
   }
 }

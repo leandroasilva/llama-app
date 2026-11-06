@@ -1139,6 +1139,9 @@ fn dispatch_engine(method: &str, args: &Value) -> Value {
             {
                 installer::PathSymlinkOutcome::Linked => json!({ "outcome": "linked" }),
                 installer::PathSymlinkOutcome::LeftExisting => json!({ "outcome": "leftExisting" }),
+                installer::PathSymlinkOutcome::Unsupported => {
+                    json!({ "outcome": "unsupported" })
+                }
                 installer::PathSymlinkOutcome::Failed(message) => {
                     json!({ "outcome": "failed", "message": message })
                 }

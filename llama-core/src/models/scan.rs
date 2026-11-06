@@ -65,7 +65,7 @@ pub fn scan(cache_dir: &str, mem_cache_dir: &str) -> CatalogScan {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::path::{Path, PathBuf};

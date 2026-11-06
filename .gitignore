@@ -2,6 +2,7 @@ _*
 .*
 !.github/
 !.gitignore
+!.gitattributes
 !Fixtures/hf_cache/cache/.llama-partial/
 
 *.md

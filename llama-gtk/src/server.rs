@@ -15,6 +15,16 @@ pub struct ServerHandle {
 
 impl ServerHandle {
     pub fn stop(&mut self) {
+        #[cfg(windows)]
+        {
+            // `Child::kill` only terminates llama-server.exe, leaving any helper
+            // processes behind. Ask Windows to terminate the whole tree first.
+            let pid = self.child.id().to_string();
+            let mut taskkill = Command::new("taskkill");
+            taskkill.args(["/PID", &pid, "/T", "/F"]);
+            hide_console(&mut taskkill);
+            let _ = taskkill.status();
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -77,14 +87,9 @@ pub fn start(settings: &mut Settings, engine_path: &str) -> Result<ServerHandle,
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     if let Some(dir) = engine::library_dir(&spec.executable_path) {
-        let existing = std::env::var_os("LD_LIBRARY_PATH").unwrap_or_default();
-        let mut value = dir.to_string_lossy().into_owned();
-        if !existing.is_empty() {
-            value.push(':');
-            value.push_str(&existing.to_string_lossy());
-        }
-        command.env("LD_LIBRARY_PATH", value);
+        prepend_library_path(&mut command, &dir);
     }
+    hide_console(&mut command);
     for key in std::env::vars()
         .map(|(k, _)| k)
         .filter(|k| k.starts_with("LLAMA_ARG_"))
@@ -118,10 +123,52 @@ pub fn start(settings: &mut Settings, engine_path: &str) -> Result<ServerHandle,
     })
 }
 
+#[cfg(windows)]
+pub fn open_web_ui(port: i64) {
+    let url = format!("http://localhost:{port}");
+    let mut command = Command::new("cmd");
+    command.args(["/C", "start", "", &url]);
+    hide_console(&mut command);
+    let _ = command.spawn();
+}
+
+#[cfg(not(windows))]
 pub fn open_web_ui(port: i64) {
     let url = format!("http://localhost:{port}");
     let _ = Command::new("xdg-open").arg(&url).spawn();
 }
+
+#[cfg(windows)]
+fn prepend_library_path(command: &mut Command, dir: &std::path::Path) {
+    let mut paths = vec![dir.to_path_buf()];
+    if let Some(existing) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&existing));
+    }
+    if let Ok(joined) = std::env::join_paths(paths) {
+        command.env("PATH", joined);
+    }
+}
+
+#[cfg(not(windows))]
+fn prepend_library_path(command: &mut Command, dir: &std::path::Path) {
+    let existing = std::env::var_os("LD_LIBRARY_PATH").unwrap_or_default();
+    let mut value = dir.to_string_lossy().into_owned();
+    if !existing.is_empty() {
+        value.push(':');
+        value.push_str(&existing.to_string_lossy());
+    }
+    command.env("LD_LIBRARY_PATH", value);
+}
+
+#[cfg(windows)]
+fn hide_console(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn hide_console(_command: &mut Command) {}
 
 pub fn port_in_use(port: i64) -> bool {
     use std::net::TcpListener;

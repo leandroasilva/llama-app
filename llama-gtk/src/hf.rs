@@ -19,7 +19,7 @@ use llama_core::pathutil::last_path_component;
 use crate::paths;
 use crate::settings::Settings;
 
-pub const USER_AGENT: &str = "llama-app/0.1 (Linux; llama-gtk)";
+pub const USER_AGENT: &str = "llama-app/0.1 (llama-gtk)";
 
 #[derive(Debug, Clone)]
 pub struct UiModel {

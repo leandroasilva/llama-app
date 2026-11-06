@@ -177,6 +177,7 @@ impl State {
 }
 
 fn main() -> glib::ExitCode {
+    paths::prepare_runtime();
     paths::ensure_dirs();
     let app = gtk::Application::builder().application_id(APP_ID).build();
     app.connect_activate(|app| {

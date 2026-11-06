@@ -18,6 +18,14 @@ Every release also includes Linux packages for the major distributions:
 
 The Linux build needs GTK 4.6 or newer and CA certificates. Install the matching package with your distribution's package manager, or extract the tarball and run `llama-gtk`. The GTK frontend covers model management, downloads, engine install, server lifecycle, and settings; macOS-only integrations such as the menu-bar tray, global hotkeys, and Keychain are not available yet.
 
+### Windows
+
+Every release also includes a portable Windows package:
+
+- **Windows 10/11 x86_64** — `llama-gtk-<version>-windows-x86_64.zip`
+
+Download the ZIP, extract it anywhere, and run `llama-gtk.exe`. The package bundles the GTK4 runtime, icons, and GLib schemas, so no separate GTK installation is required. CPU and Vulkan engine builds are supported; Windows on arm64 is not yet available. The package is not code-signed, so Windows SmartScreen may ask for confirmation on first launch.
+
 ## What it does
 
 Llama runs a local OpenAI-compatible API server powered by llama.cpp. When you start the app, it listens on `http://localhost:9931/v1` and stays resident in your menu bar. Models load into memory on demand and unload when idle, so they only consume RAM while you're actively using them.
@@ -167,12 +175,14 @@ defaults delete app.llama.Llama extraServerArgs   # reset
 - macOS 15 (Sequoia) or later
 - Apple Silicon (arm64)
 - Linux: GTK 4.6+ and CA certificates (see the Linux packages above)
+- Windows: Windows 10/11 x86_64 (see the portable Windows package above)
 
 ## Architecture
 
 The app has two main layers plus an engine-adapter contract:
 
 - **`llama-core`** (Rust) — pure logic: model ID parsing, GGUF metadata reading, HF cache management, download engine, memory profiling, server launch spec construction, INI config, event system. No platform dependencies.
+- **`llama-gtk`** (Rust + GTK4) — Linux and Windows UI for model management, downloads, engine installation, server lifecycle, and settings.
 - **`Llama/`** (Swift) — macOS UI and system integration: AppKit menu bar, SwiftUI settings, global hotkey via Carbon, launch-at-login via ServiceManagement, Sparkle updates, Sentry crash reporting, deeplinks, process management, and the runtime/installer contracts in `Llama/Engine/InferenceEngineRuntime.swift`.
 
 The managed engine's version, channel, and release-artifact digest come from one manifest: `llama-core/src/engine/release.json`.
