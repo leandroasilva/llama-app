@@ -14,12 +14,12 @@ trap 'rm -rf "$WORK_DIR"' EXIT
 TARGET="x86_64-pc-windows-gnu"
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/llama-gtk/target}"
 BIN="$TARGET_DIR/$TARGET/release/llama-gtk.exe"
-MINGW_PREFIX="${MSYSTEM_PREFIX:-/mingw64}"
+MINGW_PREFIX="${MSYSTEM_PREFIX:-/ucrt64}"
 NAME="llama-gtk-${VERSION}-windows-x86_64"
 BUNDLE="$WORK_DIR/$NAME"
 
 if [ ! -d "$MINGW_PREFIX" ]; then
-    echo "missing MSYS2 mingw prefix: $MINGW_PREFIX" >&2
+    echo "missing MSYS2 toolchain prefix: $MINGW_PREFIX" >&2
     exit 1
 fi
 
@@ -52,7 +52,7 @@ copy_dlls() {
         while IFS= read -r dll; do
             [ -f "$dll" ] || continue
             case "$dll" in
-                "$MINGW_PREFIX"/* | /mingw64/* | *"/mingw64/"*) ;;
+                "$MINGW_PREFIX"/* | /ucrt64/* | *"/ucrt64/"* | /mingw64/* | *"/mingw64/"*) ;;
                 *) continue ;;
             esac
             local base

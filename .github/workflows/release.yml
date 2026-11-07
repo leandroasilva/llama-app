@@ -328,7 +328,7 @@ jobs:
     needs: build-and-release
     runs-on: windows-latest
     env:
-      PKG_CONFIG_PATH: /mingw64/lib/pkgconfig
+      PKG_CONFIG_PATH: /ucrt64/lib/pkgconfig
       CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: x86_64-w64-mingw32-gcc
       CMAKE_GENERATOR: Ninja
       CMAKE_C_COMPILER: x86_64-w64-mingw32-gcc
@@ -349,15 +349,15 @@ jobs:
       - name: Set up MSYS2
         uses: msys2/setup-msys2@v2
         with:
-          msystem: MINGW64
+          msystem: UCRT64
           update: true
           install: >-
-            mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-gtk4
-            mingw-w64-x86_64-nasm
-            mingw-w64-x86_64-ninja
-            mingw-w64-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-gtk4
+            mingw-w64-ucrt-x86_64-nasm
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-pkgconf
             zip
 
       - name: Cache Cargo
@@ -377,7 +377,7 @@ jobs:
         env:
           VERSION: ${{ needs.build-and-release.outputs.version }}
         run: |
-          export PATH="/c/Users/runneradmin/.cargo/bin:/mingw64/bin:/usr/bin:/bin"
+          export PATH="/c/Users/runneradmin/.cargo/bin:/ucrt64/bin:/usr/bin:/bin"
           bash scripts/windows/package.sh "$VERSION" build/windows
 
       - name: Upload package to release
