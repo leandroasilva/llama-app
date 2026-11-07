@@ -27,6 +27,23 @@ def read_gguf(name: str) -> bytes:
         return fh.read()
 
 
+def encode_partial_component(component: str) -> str:
+    # Keep in sync with `PARTIAL_COMPONENT_UNSAFE` in llama-core's hf_cache.rs.
+    unsafe = set('%<>:"\\|?*')
+    out = []
+    for ch in component:
+        if ch in unsafe or ord(ch) < 32:
+            out.append(f"%{ord(ch):02X}")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def partial_dir(model_id: str) -> str:
+    parts = [encode_partial_component(p) for p in model_id.split("/")]
+    return os.path.join(CACHE, ".llama-partial", *parts)
+
+
 FULL = read_gguf("full.gguf")          # ctx 40960, embedded MTP
 NOMTP = read_gguf("nomtp.gguf")        # ctx 8192, no head
 DECISION = read_gguf("decision.gguf")  # ctx 32768, decision model
@@ -111,7 +128,7 @@ link("models--org--Partial-GGUF", "commit6", "inc-Q4_K_M-00002-of-00003.gguf", h
 write_ref("models--org--Partial-GGUF", "commit6")
 
 # 7. Staging partials for Tiny-GGUF + an unrelated org.
-pdir = os.path.join(CACHE, ".llama-partial", "unsloth", "Tiny-GGUF:Q4_K_M")
+pdir = partial_dir("unsloth/Tiny-GGUF:Q4_K_M")
 os.makedirs(pdir, exist_ok=True)
 with open(os.path.join(pdir, ".model.json"), "w") as fh:
     fh.write('{"id":"unsloth/Tiny-GGUF:Q4_K_M"}')
@@ -120,7 +137,7 @@ with open(os.path.join(pdir, "tiny-Q4_K_M.gguf.partial"), "wb") as fh:
 with open(os.path.join(pdir, "extra.partial"), "wb") as fh:
     fh.write(b"01234567")  # 8 bytes
 
-odir = os.path.join(CACHE, ".llama-partial", "org", "Other-GGUF:Q8_0")
+odir = partial_dir("org/Other-GGUF:Q8_0")
 os.makedirs(odir, exist_ok=True)
 with open(os.path.join(odir, ".model.json"), "w") as fh:
     fh.write('{"id":"org/Other-GGUF:Q8_0"}')
@@ -232,8 +249,8 @@ fixture = {
     "scanPlaceholders": {
         "cacheDir": "hf_cache/cache",
         "paths": [
-            ".llama-partial/unsloth/Tiny-GGUF:Q4_K_M/.model.json",
-            ".llama-partial/org/Other-GGUF:Q8_0/.model.json",
+            os.path.relpath(os.path.join(pdir, ".model.json"), CACHE).replace(os.sep, "/"),
+            os.path.relpath(os.path.join(odir, ".model.json"), CACHE).replace(os.sep, "/"),
         ],
     },
     "snapshotFileExists": [
@@ -261,8 +278,8 @@ fixture = {
             "mmprojFileExists": False,
             "blobsDirExists": False,
             "snapshotsDirExists": False,
-            "repoDirExists": True,
-            "refsMainExists": True,
+            "repoDirExists": False,
+            "refsMainExists": False,
         },
     },
 }

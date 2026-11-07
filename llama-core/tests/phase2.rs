@@ -345,6 +345,30 @@ fn hf_cache_partial_bytes() {
 }
 
 #[test]
+fn hf_cache_partial_dir_encodes_unsafe_components() {
+    let tmp = unique_temp_dir("partial-encode");
+    let dir = HFCache::partial_dir(tmp.to_str().unwrap(), "org/Repo:Q4_K_M");
+    assert_eq!(
+        dir,
+        tmp.join(".llama-partial").join("org").join("Repo%3AQ4_K_M")
+    );
+    assert!(!dir.to_string_lossy().contains(':'));
+}
+
+#[cfg(unix)]
+#[test]
+fn hf_cache_partial_dir_prefers_legacy_unix_layout() {
+    let tmp = unique_temp_dir("partial-legacy");
+    let legacy = tmp.join(".llama-partial").join("org").join("Repo:Q4_K_M");
+    fs::create_dir_all(&legacy).unwrap();
+
+    assert_eq!(
+        HFCache::partial_dir(tmp.to_str().unwrap(), "org/Repo:Q4_K_M"),
+        legacy
+    );
+}
+
+#[test]
 fn hf_cache_scan_placeholders() {
     let f = hf_fixture();
     let cache = fixtures_dir().join(&f.scan_placeholders.cache_dir);

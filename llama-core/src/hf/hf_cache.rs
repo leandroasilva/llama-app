@@ -14,6 +14,7 @@
 use crate::hf::{GGUFMetadata, GGUFQuant, HFRepoParser, SidecarPicker};
 use crate::models::{model, DraftHead, ResolvedPaths};
 use crate::pathutil::last_path_component;
+use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -28,6 +29,20 @@ pub const PARTIAL_ROOT_DIR_NAME: &str = ".llama-partial";
 /// File name of the per-download placeholder dropped next to a model's
 /// `.partial` files.
 pub const PLACEHOLDER_FILE_NAME: &str = ".model.json";
+
+/// Characters that can't appear in a Windows path component, plus `%` so the
+/// encoding is unambiguous. Partial dirs are encoded on every platform so the
+/// on-disk layout stays identical (and test fixtures stay checkout-safe).
+const PARTIAL_COMPONENT_UNSAFE: &AsciiSet = &CONTROLS
+    .add(b'%')
+    .add(b'<')
+    .add(b'>')
+    .add(b':')
+    .add(b'"')
+    .add(b'\\')
+    .add(b'|')
+    .add(b'?')
+    .add(b'*');
 
 /// A model discovered on disk by [`HFCache::scan_for_sideloaded`]. This mirrors
 /// the subset of Swift's `Model` those scan paths actually compute; the Swift
@@ -89,7 +104,31 @@ impl HFCache {
     /// Directory that holds in-progress `.partial` files for a model. Lives under
     /// the HF cache so promoting `.partial` → `blobs/<hash>` stays on the same
     /// filesystem (`moveItem` is atomic).
+    ///
+    /// Each path component is percent-encoded for characters Windows rejects
+    /// (notably the `:` in `org/repo:quant`). If an older raw (colon) directory
+    /// still exists, it wins so paused downloads from previous versions resume.
     pub fn partial_dir(cache_dir: &str, model_id: &str) -> PathBuf {
+        let encoded = Self::encoded_partial_dir(cache_dir, model_id);
+        if encoded.exists() {
+            return encoded;
+        }
+        let legacy = Self::legacy_partial_dir(cache_dir, model_id);
+        if legacy.exists() {
+            return legacy;
+        }
+        encoded
+    }
+
+    fn encoded_partial_dir(cache_dir: &str, model_id: &str) -> PathBuf {
+        let mut dir = Path::new(cache_dir).join(PARTIAL_ROOT_DIR_NAME);
+        for component in model_id.split('/') {
+            dir.push(utf8_percent_encode(component, PARTIAL_COMPONENT_UNSAFE).to_string());
+        }
+        dir
+    }
+
+    fn legacy_partial_dir(cache_dir: &str, model_id: &str) -> PathBuf {
         Path::new(cache_dir)
             .join(PARTIAL_ROOT_DIR_NAME)
             .join(model_id)
@@ -110,16 +149,25 @@ impl HFCache {
     /// Removes the model's partial directory (and any files under it). Silently
     /// ignores missing dirs -- used by cancel/delete/cleanup paths.
     pub fn remove_partials(cache_dir: &str, model_id: &str) {
-        let dir = Self::partial_dir(cache_dir, model_id);
-        let _ = fs::remove_dir_all(&dir);
-
-        // A model id has a slash (`org/repo:quant`), so its dir sits inside an
-        // org dir that would otherwise be left behind empty. Remove that one
-        // level, but only if it's empty -- POSIX `rmdir` refuses a non-empty dir.
         let root = Path::new(cache_dir).join(PARTIAL_ROOT_DIR_NAME);
-        if let Some(org_dir) = dir.parent() {
-            if org_dir != root {
-                let _ = fs::remove_dir(org_dir);
+        let mut dirs = vec![
+            Self::partial_dir(cache_dir, model_id),
+            Self::legacy_partial_dir(cache_dir, model_id),
+        ];
+        dirs.sort();
+        dirs.dedup();
+
+        for dir in dirs {
+            let _ = fs::remove_dir_all(&dir);
+
+            // A model id has a slash (`org/repo:quant`), so its dir sits inside
+            // an org dir that would otherwise be left behind empty. Remove that
+            // one level, but only if it's empty -- POSIX `rmdir` refuses a
+            // non-empty dir.
+            if let Some(org_dir) = dir.parent() {
+                if org_dir != root {
+                    let _ = fs::remove_dir(org_dir);
+                }
             }
         }
     }

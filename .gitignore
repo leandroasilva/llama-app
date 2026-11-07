@@ -4,6 +4,7 @@ _*
 !.gitignore
 !.gitattributes
 !Fixtures/hf_cache/cache/.llama-partial/
+!Fixtures/hf_cache/cache/.llama-partial/**/.model.json
 
 *.md
 !readme.md

@@ -122,8 +122,8 @@
   "scanPlaceholders": {
     "cacheDir": "hf_cache/cache",
     "paths": [
-      ".llama-partial/unsloth/Tiny-GGUF:Q4_K_M/.model.json",
-      ".llama-partial/org/Other-GGUF:Q8_0/.model.json"
+      ".llama-partial/unsloth/Tiny-GGUF%3AQ4_K_M/.model.json",
+      ".llama-partial/org/Other-GGUF%3AQ8_0/.model.json"
     ]
   },
   "snapshotFileExists": [
