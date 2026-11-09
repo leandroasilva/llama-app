@@ -381,6 +381,16 @@ jobs:
           export PATH="/c/Users/runneradmin/.cargo/bin:/ucrt64/bin:/usr/bin:/bin"
           bash scripts/windows/package.sh "$VERSION" build/windows
 
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Build Windows installer
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.build-and-release.outputs.version }}
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/windows/build-installer.ps1 -Version $env:VERSION -OutputDir build/windows
+
       - name: Upload package to release
         uses: softprops/action-gh-release@v2
         with:

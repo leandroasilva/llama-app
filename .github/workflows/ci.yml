@@ -168,6 +168,14 @@ jobs:
           export PATH="/c/Users/runneradmin/.cargo/bin:/ucrt64/bin:/usr/bin:/bin"
           bash scripts/windows/package.sh 0.0.0 build/windows
 
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Build Windows installer
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/windows/build-installer.ps1 -Version 0.0.0 -OutputDir build/windows
+
   swift-build:
     name: Swift — build + test
     runs-on: macos-15

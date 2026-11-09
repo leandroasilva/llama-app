@@ -20,11 +20,12 @@ The Linux build needs GTK 4.6 or newer and CA certificates. Install the matching
 
 ### Windows
 
-Every release also includes a portable Windows package:
+Every release includes a standard Windows installer and a portable package:
 
-- **Windows 10/11 x86_64** — `llama-gtk-<version>-windows-x86_64.zip`
+- **Windows 10/11 x86_64 installer** — `llama-gtk-<version>-windows-x86_64-setup.exe`
+- **Windows 10/11 x86_64 portable** — `llama-gtk-<version>-windows-x86_64.zip`
 
-Download the ZIP, extract it anywhere, and run `llama-gtk.exe`. The package bundles the GTK4 runtime, icons, and GLib schemas, so no separate GTK installation is required. CPU and Vulkan engine builds are supported; Windows on arm64 is not yet available. The package is not code-signed, so Windows SmartScreen may ask for confirmation on first launch.
+Run the installer for a normal per-user installation with Start Menu and optional desktop shortcuts, or extract the ZIP anywhere and run `llama-gtk.exe`. Both bundles include the GTK4 runtime, icons, and GLib schemas, so no separate GTK installation is required. CPU and Vulkan engine builds are supported; Windows on arm64 is not yet available. Neither artifact is code-signed, so Windows SmartScreen may ask for confirmation on first launch.
 
 ## What it does
 

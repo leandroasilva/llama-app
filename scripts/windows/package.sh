@@ -68,6 +68,14 @@ copy_dlls() {
 
 copy_dlls "$BUNDLE/llama-gtk.exe"
 
+# GLib's Windows D-Bus autolaunch looks for gdbus.exe next to libgio and in
+# PATH. Without it, GTK warns "win32 session dbus binary not found".
+if [ -f "$MINGW_PREFIX/bin/gdbus.exe" ]; then
+    install -m 0755 "$MINGW_PREFIX/bin/gdbus.exe" "$BUNDLE/gdbus.exe"
+else
+    echo "warning: gdbus.exe not found in $MINGW_PREFIX/bin" >&2
+fi
+
 for dir in glib-2.0 icons gtk-4.0 mime; do
     if [ -d "$MINGW_PREFIX/share/$dir" ]; then
         mkdir -p "$BUNDLE/share/$dir"
