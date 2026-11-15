@@ -1,2 +1,2 @@
 #!/bin/sh
-echo b12005-0000000
+echo "version: 1.0.0 (build 12359, commit b1b770d90)"

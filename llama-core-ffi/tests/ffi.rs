@@ -643,8 +643,8 @@ fn fase4_engine() {
 
     let release: serde_json::Value =
         serde_json::from_str(&call("engine.targetRelease", "{}").unwrap()).unwrap();
-    assert_eq!(release["version"], "b12005");
-    assert_eq!(release["channel"], "preview");
+    assert_eq!(release["version"], "b12359");
+    assert_eq!(release["channel"], "stable");
     assert_eq!(release["sha256"].as_str().unwrap().len(), 64);
 
     // metalConfig: matched and unsupported.
@@ -659,8 +659,8 @@ fn fase4_engine() {
 
     // Artifact URLs.
     assert_eq!(
-        call("engine.artifactUrl", r#"{"version":"b12005"}"#).unwrap(),
-        r#"{"url":"https://github.com/ggml-org/llama.cpp/releases/download/b12005/llama-b12005-bin-macos-arm64.tar.gz"}"#
+        call("engine.artifactUrl", r#"{"version":"b12359"}"#).unwrap(),
+        r#"{"url":"https://github.com/ggml-org/llama.cpp/releases/download/b12359/llama-b12359-bin-macos-arm64.tar.gz"}"#
     );
     assert_eq!(
         call("engine.unzstdUrl", r#"{"version":"b11429"}"#).unwrap(),
@@ -757,7 +757,7 @@ fn fase4_engine() {
             &serde_json::json!({ "path": bin.to_string_lossy() }).to_string()
         )
         .unwrap(),
-        r#"{"build":12005}"#
+        r#"{"build":12359}"#
     );
 
     // decompress: success + classified failure.
@@ -836,7 +836,7 @@ fn fase4_engine() {
             &serde_json::json!({
                 "staged": staged.to_string_lossy(),
                 "live": live2.to_string_lossy(),
-                "targetBuild": 12005,
+                "targetBuild": 12359,
                 "home": home,
             })
             .to_string()

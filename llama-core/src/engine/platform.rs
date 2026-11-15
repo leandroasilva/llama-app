@@ -136,7 +136,7 @@ impl Target {
         }
     }
 
-    /// The archive's top-level directory, e.g. `llama-b12005`. Windows archives
+    /// The archive's top-level directory, e.g. `llama-b12359`. Windows archives
     /// put their files at the ZIP root, so their bundle name is empty.
     pub fn bundle_name(self, version: &str) -> String {
         match self {
@@ -242,36 +242,36 @@ mod tests {
     #[test]
     fn linux_cpu_assets_match_upstream_names() {
         assert_eq!(
-            artifact_url("b12005", Target::LinuxCpuX86_64),
-            "https://github.com/ggml-org/llama.cpp/releases/download/b12005/llama-b12005-bin-ubuntu-x64.tar.gz"
+            artifact_url("b12359", Target::LinuxCpuX86_64),
+            "https://github.com/ggml-org/llama.cpp/releases/download/b12359/llama-b12359-bin-ubuntu-x64.tar.gz"
         );
         assert_eq!(
-            artifact_file_name("b12005", Target::LinuxCpuAarch64),
-            "llama-b12005-bin-ubuntu-arm64.tar.gz"
+            artifact_file_name("b12359", Target::LinuxCpuAarch64),
+            "llama-b12359-bin-ubuntu-arm64.tar.gz"
         );
     }
 
     #[test]
     fn linux_vulkan_assets_match_upstream_names() {
         assert_eq!(
-            artifact_file_name("b12005", Target::LinuxVulkanX86_64),
-            "llama-b12005-bin-ubuntu-vulkan-x64.tar.gz"
+            artifact_file_name("b12359", Target::LinuxVulkanX86_64),
+            "llama-b12359-bin-ubuntu-vulkan-x64.tar.gz"
         );
         assert_eq!(
-            artifact_file_name("b12005", Target::LinuxVulkanAarch64),
-            "llama-b12005-bin-ubuntu-vulkan-arm64.tar.gz"
+            artifact_file_name("b12359", Target::LinuxVulkanAarch64),
+            "llama-b12359-bin-ubuntu-vulkan-arm64.tar.gz"
         );
     }
 
     #[test]
     fn windows_assets_match_upstream_names() {
         assert_eq!(
-            artifact_url("b12005", Target::WindowsCpuX86_64),
-            "https://github.com/ggml-org/llama.cpp/releases/download/b12005/llama-b12005-bin-win-cpu-x64.zip"
+            artifact_url("b12359", Target::WindowsCpuX86_64),
+            "https://github.com/ggml-org/llama.cpp/releases/download/b12359/llama-b12359-bin-win-cpu-x64.zip"
         );
         assert_eq!(
-            artifact_file_name("b12005", Target::WindowsVulkanX86_64),
-            "llama-b12005-bin-win-vulkan-x64.zip"
+            artifact_file_name("b12359", Target::WindowsVulkanX86_64),
+            "llama-b12359-bin-win-vulkan-x64.zip"
         );
     }
 
@@ -281,12 +281,12 @@ mod tests {
         let cpu = artifact_for(&release.version, Target::WindowsCpuX86_64);
         assert_eq!(
             cpu.sha256.as_deref(),
-            Some("96a257d50cd6fff66a884de562a3da595ffb9288e2eacad1b3e6804224a2aded")
+            Some("837c1655e87df3b66989f4be33a792a1399c785bf259038dc75c900096683e69")
         );
         let vulkan = artifact_for(&release.version, Target::WindowsVulkanX86_64);
         assert_eq!(
             vulkan.sha256.as_deref(),
-            Some("e96b7cf72034ad8ca2be474f6ddd565519931b10ac48f0c1a0fae7e7288525f4")
+            Some("e8d18c6e4210cca87e7307c2ea78363ac8d158e4e1397358ec96ab70b53a0d5e")
         );
         assert_eq!(cpu.bundle_name, "");
     }
@@ -313,12 +313,12 @@ mod tests {
         let x64 = artifact_for(&release.version, Target::LinuxCpuX86_64);
         assert_eq!(
             x64.sha256.as_deref(),
-            Some("fca5e36156c4b6d0eebd98ae807d8baad7684f50c14425cca67cccc94de722f1")
+            Some("0bc1f091e8916102b6d8f2cf944233a620e90a0f856c72d0ce41150c65c2e72e")
         );
         let arm = artifact_for(&release.version, Target::LinuxVulkanAarch64);
         assert_eq!(
             arm.sha256.as_deref(),
-            Some("dbb907a07bbc8eee05442002b2626bfb0fee20d816463cda2f4f8d24c5034d69")
+            Some("3f8ae812a58ac92e5a596ca9fbc988f52854d147c5a7fe1264dddc90c1d085b4")
         );
         assert_eq!(x64.bundle_name, format!("llama-{}", release.version));
     }
@@ -332,8 +332,8 @@ mod tests {
     #[test]
     fn mac_arm_artifact_stays_the_legacy_url() {
         assert_eq!(
-            artifact_url("b12005", Target::MacOSAarch64),
-            super::super::installer::artifact_url("b12005")
+            artifact_url("b12359", Target::MacOSAarch64),
+            super::super::installer::artifact_url("b12359")
         );
     }
 }

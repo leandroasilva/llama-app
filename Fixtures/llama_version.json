@@ -4,6 +4,7 @@
     { "input": "b9370", "build": 9370 },
     { "input": "b9370-aa50b2c2a", "build": 9370 },
     { "input": "version: 0.5.0-dev (build 11200, commit 81bc6b83f)", "build": 11200 },
+    { "input": "version: 1.0.0 (build 12359, commit b1b770d90)", "build": 12359 },
     { "input": "b10398", "build": 10398 },
     { "input": "9370", "build": 9370 },
     { "input": "B42", "build": 42 },
