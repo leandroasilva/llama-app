@@ -2,8 +2,8 @@
 //!
 //! The engine release is one GitHub tag with per-OS/arch/backend archives. The
 //! macOS app pins the Apple Silicon archive; the GTK frontend picks a variant
-//! from the host architecture and the user's selected backend on Linux and
-//! Windows. Digests for the pinned release live in `release.json`, so an install
+//! from the host architecture and the user's selected backend on Linux. Digests
+//! for the pinned release live in `release.json`, so an install
 //! never trusts an archive without one when the tag is known.
 
 use super::binaries::target_release;
@@ -14,7 +14,6 @@ use super::installer::RELEASE_BASE;
 pub enum TargetOs {
     MacOS,
     Linux,
-    Windows,
 }
 
 impl TargetOs {
@@ -22,7 +21,6 @@ impl TargetOs {
         match self {
             Self::MacOS => "macos",
             Self::Linux => "linux",
-            Self::Windows => "windows",
         }
     }
 
@@ -32,7 +30,6 @@ impl TargetOs {
         match std::env::consts::OS {
             "macos" => Some(Self::MacOS),
             "linux" => Some(Self::Linux),
-            "windows" => Some(Self::Windows),
             _ => None,
         }
     }
@@ -64,7 +61,7 @@ impl TargetArch {
     }
 }
 
-/// Compute backend variant requested for Linux and Windows.
+/// Compute backend variant requested for Linux.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinuxBackend {
     Cpu,
@@ -89,8 +86,6 @@ pub enum Target {
     LinuxCpuX86_64,
     LinuxVulkanAarch64,
     LinuxVulkanX86_64,
-    WindowsCpuX86_64,
-    WindowsVulkanX86_64,
 }
 
 impl Target {
@@ -102,15 +97,12 @@ impl Target {
             Self::LinuxCpuX86_64 => "linux-cpu-x86_64",
             Self::LinuxVulkanAarch64 => "linux-vulkan-aarch64",
             Self::LinuxVulkanX86_64 => "linux-vulkan-x86_64",
-            Self::WindowsCpuX86_64 => "windows-cpu-x86_64",
-            Self::WindowsVulkanX86_64 => "windows-vulkan-x86_64",
         }
     }
 
     pub fn os(self) -> TargetOs {
         match self {
             Self::MacOSAarch64 | Self::MacOSX86_64 => TargetOs::MacOS,
-            Self::WindowsCpuX86_64 | Self::WindowsVulkanX86_64 => TargetOs::Windows,
             _ => TargetOs::Linux,
         }
     }
@@ -126,30 +118,19 @@ impl Target {
 
     pub fn backend(self) -> Option<LinuxBackend> {
         match self {
-            Self::LinuxCpuAarch64 | Self::LinuxCpuX86_64 | Self::WindowsCpuX86_64 => {
-                Some(LinuxBackend::Cpu)
-            }
-            Self::LinuxVulkanAarch64 | Self::LinuxVulkanX86_64 | Self::WindowsVulkanX86_64 => {
-                Some(LinuxBackend::Vulkan)
-            }
+            Self::LinuxCpuAarch64 | Self::LinuxCpuX86_64 => Some(LinuxBackend::Cpu),
+            Self::LinuxVulkanAarch64 | Self::LinuxVulkanX86_64 => Some(LinuxBackend::Vulkan),
             _ => None,
         }
     }
 
-    /// The archive's top-level directory, e.g. `llama-b12359`. Windows archives
-    /// put their files at the ZIP root, so their bundle name is empty.
+    /// The archive's top-level directory, e.g. `llama-b12359`.
     pub fn bundle_name(self, version: &str) -> String {
-        match self {
-            Self::WindowsCpuX86_64 | Self::WindowsVulkanX86_64 => String::new(),
-            _ => format!("llama-{version}"),
-        }
+        format!("llama-{version}")
     }
 
     fn archive_extension(self) -> &'static str {
-        match self {
-            Self::WindowsCpuX86_64 | Self::WindowsVulkanX86_64 => "zip",
-            _ => "tar.gz",
-        }
+        "tar.gz"
     }
 
     fn asset_stem(self) -> &'static str {
@@ -160,8 +141,6 @@ impl Target {
             Self::LinuxCpuX86_64 => "ubuntu-x64",
             Self::LinuxVulkanAarch64 => "ubuntu-vulkan-arm64",
             Self::LinuxVulkanX86_64 => "ubuntu-vulkan-x64",
-            Self::WindowsCpuX86_64 => "win-cpu-x64",
-            Self::WindowsVulkanX86_64 => "win-vulkan-x64",
         }
     }
 }
@@ -179,13 +158,6 @@ pub fn target_for(os: TargetOs, arch: TargetArch, backend: LinuxBackend) -> Opti
         (TargetOs::Linux, TargetArch::X86_64, LinuxBackend::Vulkan) => {
             Some(Target::LinuxVulkanX86_64)
         }
-        (TargetOs::Windows, TargetArch::X86_64, LinuxBackend::Cpu) => {
-            Some(Target::WindowsCpuX86_64)
-        }
-        (TargetOs::Windows, TargetArch::X86_64, LinuxBackend::Vulkan) => {
-            Some(Target::WindowsVulkanX86_64)
-        }
-        (TargetOs::Windows, TargetArch::Aarch64, _) => None,
     }
 }
 
@@ -264,50 +236,6 @@ mod tests {
     }
 
     #[test]
-    fn windows_assets_match_upstream_names() {
-        assert_eq!(
-            artifact_url("b12359", Target::WindowsCpuX86_64),
-            "https://github.com/ggml-org/llama.cpp/releases/download/b12359/llama-b12359-bin-win-cpu-x64.zip"
-        );
-        assert_eq!(
-            artifact_file_name("b12359", Target::WindowsVulkanX86_64),
-            "llama-b12359-bin-win-vulkan-x64.zip"
-        );
-    }
-
-    #[test]
-    fn pinned_release_carries_windows_digests() {
-        let release = target_release();
-        let cpu = artifact_for(&release.version, Target::WindowsCpuX86_64);
-        assert_eq!(
-            cpu.sha256.as_deref(),
-            Some("837c1655e87df3b66989f4be33a792a1399c785bf259038dc75c900096683e69")
-        );
-        let vulkan = artifact_for(&release.version, Target::WindowsVulkanX86_64);
-        assert_eq!(
-            vulkan.sha256.as_deref(),
-            Some("e8d18c6e4210cca87e7307c2ea78363ac8d158e4e1397358ec96ab70b53a0d5e")
-        );
-        assert_eq!(cpu.bundle_name, "");
-    }
-
-    #[test]
-    fn windows_targets_are_selected_for_x64_only() {
-        assert_eq!(
-            target_for(TargetOs::Windows, TargetArch::X86_64, LinuxBackend::Cpu),
-            Some(Target::WindowsCpuX86_64)
-        );
-        assert_eq!(
-            target_for(TargetOs::Windows, TargetArch::X86_64, LinuxBackend::Vulkan),
-            Some(Target::WindowsVulkanX86_64)
-        );
-        assert_eq!(
-            target_for(TargetOs::Windows, TargetArch::Aarch64, LinuxBackend::Cpu),
-            None
-        );
-    }
-
-    #[test]
     fn pinned_release_carries_linux_digests() {
         let release = target_release();
         let x64 = artifact_for(&release.version, Target::LinuxCpuX86_64);
@@ -321,6 +249,16 @@ mod tests {
             Some("3f8ae812a58ac92e5a596ca9fbc988f52854d147c5a7fe1264dddc90c1d085b4")
         );
         assert_eq!(x64.bundle_name, format!("llama-{}", release.version));
+    }
+
+    #[test]
+    fn pinned_release_has_only_linux_and_macos_artifacts() {
+        let release = target_release();
+        let artifacts = release.artifacts.unwrap();
+        assert_eq!(artifacts.len(), 6);
+        assert!(artifacts
+            .keys()
+            .all(|key| key.starts_with("linux-") || key.starts_with("macos-")));
     }
 
     #[test]
